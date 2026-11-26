@@ -90,7 +90,7 @@ class _LivestockPageState extends State<LivestockPage> {
     if(!mounted||status==null||_statusBusy)return;
     setState(()=>_statusBusy=true);
     try{
-      await repository.setAnimalStatus(snapshot,animal.id,status);
+      await (repository as AnimalLifecycleWriter).setAnimalStatus(snapshot,animal.id,status);
       if(mounted){_archived=!config.active(status);await _load(keepSelected:animal.id);}
     }on StateError catch(e){
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('${e.message}. Si falta un motivo, usa Editar ficha y estado.')));
