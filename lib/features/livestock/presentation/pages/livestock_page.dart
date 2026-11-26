@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 import 'package:intl/intl.dart';
 import '../../../auth/domain/auth_gateway.dart';
@@ -21,6 +22,12 @@ class LivestockPage extends StatefulWidget {
 
 class _LivestockPageState extends State<LivestockPage> {
   final _search = TextEditingController();
+  Timer? _searchTimer;
+  String _query='';
+  void _scheduleSearch(){
+    _searchTimer?.cancel();
+    _searchTimer=Timer(const Duration(milliseconds:150),(){if(mounted)setState(()=>_query=_search.text);});
+  }
   InventorySnapshot? _snapshot;
   List<InventoryAnimal> _animals = [];
   String? _selectedId;
@@ -46,6 +53,7 @@ class _LivestockPageState extends State<LivestockPage> {
   void dispose() {
     widget.auth.removeListener(_authChanged);
     widget.ranchChanges.removeListener(_authChanged);
+    _searchTimer?.cancel();
     _search.dispose();
     super.dispose();
   }
@@ -112,7 +120,8 @@ class _LivestockPageState extends State<LivestockPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final filtered = _animals.where((animal) => animal.active != _archived && animal.matches(_search.text)).toList();
+    final activeCount=_animals.where((a)=>a.active).length;
+    final filtered = _animals.where((animal) => animal.active != _archived && (_query.trim().isEmpty||animal.matches(_query))).toList();
     final selected = _animals.where((a) => a.id == _selectedId).firstOrNull;
     if (selected != null) {
       return PopScope(canPop: false, onPopInvokedWithResult: (didPop, result) {
@@ -140,16 +149,16 @@ class _LivestockPageState extends State<LivestockPage> {
                 Text(_snapshot?.status == 'pending' ? 'Solicitud de acceso pendiente.' : 'No perteneces a un rancho activo.'),
               if (_snapshot?.status == 'active') ...[
                 const SizedBox(height: 16),
-                TextField(controller: _search, onChanged: (_) => setState(() {}), decoration: InputDecoration(
+                TextField(controller: _search, onChanged: (_) {setState(() {});_scheduleSearch();}, decoration: InputDecoration(
                   hintText: 'Buscar por arete, nombre o raza',
                   prefixIcon: const Icon(Icons.search),
                   border: const OutlineInputBorder(),
-                  suffixIcon: _search.text.isEmpty ? null : IconButton(tooltip: 'Limpiar búsqueda', onPressed: () { _search.clear(); setState(() {}); }, icon: const Icon(Icons.close)),
+                  suffixIcon: _search.text.isEmpty ? null : IconButton(tooltip: 'Limpiar búsqueda', onPressed: () { _searchTimer?.cancel(); _search.clear(); setState(() {_query='';}); }, icon: const Icon(Icons.close)),
                 )),
                 const SizedBox(height: 12),
                 Wrap(spacing: 8, children: [
-                  ChoiceChip(label: Text('Activos (${_animals.where((a) => a.active).length})'), selected: !_archived, onSelected: (_) => setState(() => _archived = false)),
-                  ChoiceChip(label: Text('Archivo (${_animals.where((a) => !a.active).length})'), selected: _archived, onSelected: (_) => setState(() => _archived = true)),
+                  ChoiceChip(label: Text('Activos ($activeCount)'), selected: !_archived, onSelected: (_) => setState(() => _archived = false)),
+                  ChoiceChip(label: Text('Archivo (${_animals.length-activeCount})'), selected: _archived, onSelected: (_) => setState(() => _archived = true)),
                 ]),
                 const SizedBox(height: 12),
                 Text('${filtered.length} animales', style: theme.textTheme.bodySmall),
@@ -161,7 +170,7 @@ class _LivestockPageState extends State<LivestockPage> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
             sliver: SliverList(delegate: SliverChildBuilderDelegate((context, index) {
               final animal = filtered[index];
-              return _AnimalCard(animal: animal, onTap: () => setState(() => _selectedId = animal.id));
+              return _AnimalCard(key:ValueKey(animal.id),animal: animal, onTap: () => setState(() => _selectedId = animal.id));
             }, childCount: filtered.length)),
           ),
         ],
@@ -174,7 +183,7 @@ String _date(DateTime? date) => date == null ? 'Sin fecha' : DateFormat('dd/MM/y
 String _kg(double? weight) => weight == null ? 'Sin pesaje' : '${NumberFormat('0.##').format(weight)} kg';
 
 class _AnimalCard extends StatelessWidget {
-  const _AnimalCard({required this.animal, required this.onTap});
+  const _AnimalCard({super.key,required this.animal, required this.onTap});
   final InventoryAnimal animal;
   final VoidCallback onTap;
   @override

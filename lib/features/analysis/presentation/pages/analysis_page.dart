@@ -63,7 +63,7 @@ class _AnalysisPageState extends State<AnalysisPage>{
           if(points.isNotEmpty)...[
             Text('Último peso promedio: ${points.last.weight.toStringAsFixed(1)} kg · ${DateFormat('dd/MM/yyyy').format(points.last.date)}'),
             if(DateTime.now().toUtc().difference(points.last.date).inDays>=30)const Text('Aviso: el último pesaje tiene al menos 30 días.'),
-            SizedBox(height:200,child:CustomPaint(painter:_WeightChart(points,Theme.of(context).colorScheme.primary),child:const SizedBox.expand())),
+            SizedBox(height:200,child:RepaintBoundary(child:CustomPaint(painter:_WeightChart(points,Theme.of(context).colorScheme.primary),child:const SizedBox.expand()))),
             for(final p in points.reversed.take(8))ListTile(dense:true,title:Text(DateFormat('dd/MM/yyyy').format(p.date)),trailing:Text('${p.weight.toStringAsFixed(1)} kg (${p.count})')),
           ],
           if(basis==null)const Text('No hay dos fechas distintas dentro de los últimos 30 días de pesajes para calcular GMD.')
@@ -166,5 +166,9 @@ class _WeightChart extends CustomPainter{
     }
     canvas.drawPath(path,line);
   }
-  @override bool shouldRepaint(covariant _WeightChart old)=>old.points!=points||old.color!=color;
+  @override bool shouldRepaint(covariant _WeightChart old){
+    if(old.color!=color||old.points.length!=points.length)return true;
+    for(var i=0;i<points.length;i++){if(old.points[i].date!=points[i].date||old.points[i].weight!=points[i].weight)return true;}
+    return false;
+  }
 }
