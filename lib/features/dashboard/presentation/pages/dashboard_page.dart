@@ -1,7 +1,10 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
+
+import '../../../auth/domain/auth_gateway.dart';
 
 class DashboardPage extends StatelessWidget {
-  const DashboardPage({super.key});
+  const DashboardPage({super.key, required this.auth});
+  final AuthGateway auth;
 
   @override
   Widget build(BuildContext context) {
@@ -21,14 +24,9 @@ class DashboardPage extends StatelessWidget {
           ],
         ),
         actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 20),
-            child: CircleAvatar(
-              backgroundColor: colors.primaryContainer,
-              foregroundColor: colors.onPrimaryContainer,
-              child: const Icon(Icons.person_outline),
-            ),
-          ),
+          IconButton(tooltip: 'Cerrar sesión', icon: const Icon(Icons.logout), onPressed: () async {
+            try { await auth.logout(); } catch (_) { if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo cerrar la sesión. Inténtalo nuevamente.'))); }
+          }),
         ],
       ),
       body: SafeArea(
