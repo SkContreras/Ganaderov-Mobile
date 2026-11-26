@@ -1,0 +1,2 @@
+# Paso 16 — pruebas locales Mobile
+Pruebas de encolado concurrente en una instancia Drift, conservación de operación inmutable, respuesta tardía tras confirmación y reapertura de archivo SQLite con aislamiento lógico por cuenta. Ejecutadas por Flutter checks cuando CI termine. No simulan isolates independientes, Android matando proceso, red real ni Supabase. La prueba de recibo comprueba transición SQLite, no validación del contrato remoto. Pendientes staging, dos dispositivos, revocación durante envío, jornadas y cursor persistido. No activar flags de producción.
