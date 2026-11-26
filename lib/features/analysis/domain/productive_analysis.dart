@@ -57,3 +57,52 @@ int? targetDays(double weight,double gain,double target){
   final days=(target-weight)/gain;
   return days.isFinite&&days<100000000?days.ceil():null;
 }
+
+
+// Read-only view of forecasts recorded by Web. Never rewrite their audit data.
+class ForecastView {
+  const ForecastView({required this.id,required this.targetDate,required this.predicted,required this.status,this.actual,this.actualDate});
+  final String id,targetDate,status;
+  final double predicted;
+  final double? actual;
+  final String? actualDate;
+  double? get error=>actual==null?null:actual!-predicted;
+  double? get absolutePercent=>error==null||predicted==0?null:error!.abs()/predicted*100;
+}
+List<ForecastView> savedForecasts(InventorySnapshot snapshot,String animalId){
+  final row=snapshot.records.where((r)=>r['animal_id']==animalId&&r['deleted_at']==null).firstOrNull;
+  final payload=row?['payload'];
+  final raw=payload is Map?payload['forecasts']:null;
+  if(raw is! List)return [];
+  final result=<ForecastView>[];
+  bool validWeight(Object? v)=>v is num&&v.isFinite&&v>=0;
+  bool validDate(Object? v)=>v is String&&RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(v)&&DateTime.tryParse(v)?.toIso8601String().substring(0,10)==v;
+  for(final f in raw.whereType<Map>()){
+    if(f['animalId']!=animalId||f['id'] is! String||!validDate(f['targetDate'])||!validWeight(f['predictedWeight']))continue;
+    final status=f['status'];
+    if(status!='pending'&&status!='evaluated')continue;
+    if(status=='evaluated'&&(!validWeight(f['actualWeight'])||!validDate(f['actualDate'])||(f['actualDate'] as String).compareTo(f['targetDate'] as String)<0))continue;
+    result.add(ForecastView(id:f['id'] as String,targetDate:f['targetDate'] as String,predicted:(f['predictedWeight'] as num).toDouble(),status:status as String,actual:status=='evaluated'?(f['actualWeight'] as num).toDouble():null,actualDate:status=='evaluated'?f['actualDate'] as String:null));
+  }
+  return result..sort((a,b)=>b.targetDate.compareTo(a.targetDate));
+}
+class LotSummary {
+  const LotSummary(this.count,this.weighed,this.withGrowth,this.meanWeight,this.meanGain);
+  final int count,weighed,withGrowth;
+  final double? meanWeight,meanGain;
+}
+LotSummary summarizeLot(Iterable<InventoryAnimal> animals,String lot){
+  final selected=animals.where((a)=>a.active&&a.value('lot')==lot).toList();
+  final weights=<double>[],gains=<double>[];
+  for(final a in selected){
+    final points=weightHistory(a);
+    if(points.isNotEmpty)weights.add(points.last.weight);
+    final basis=recentGrowth(points);
+    if(basis!=null)gains.add(basis.gain);
+  }
+  double? mean(List<double> v)=>v.isEmpty?null:v.reduce((a,b)=>a+b)/v.length;
+  return LotSummary(selected.length,weights.length,gains.length,mean(weights),mean(gains));
+}
+List<SaleScenario> compareSalePeriods(SaleScenario base,Iterable<int> periods){
+  return (periods.toSet().toList()..sort()).map((d)=>SaleScenario(weight:base.weight,gain:base.gain,days:d,price:base.price,futurePrice:base.futurePrice,dailyCost:base.dailyCost)).where((s)=>s.valid).toList();
+}
