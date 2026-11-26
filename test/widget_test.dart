@@ -4,6 +4,12 @@ import 'package:ganaderov/app.dart';
 import 'package:ganaderov/core/router/app_router.dart';
 import 'package:ganaderov/features/auth/domain/auth_gateway.dart';
 
+import 'package:ganaderov/features/dashboard/domain/dashboard_summary.dart';
+
+class FakeDashboard implements DashboardRepository {
+  @override Future<DashboardSummary> load() async => const DashboardSummary(status: 'active', ranchName: 'Rancho de prueba', total: 3);
+}
+
 class FakeAuth extends AuthGateway {
   bool active = false;
   @override bool get signedIn => active;
@@ -27,12 +33,14 @@ void main() {
   });
   testWidgets('login and logout change protected route', (tester) async {
     final auth = FakeAuth();
-    await tester.pumpWidget(GanaderovApp(auth: auth));
+    await tester.pumpWidget(GanaderovApp(auth: auth, dashboardRepository: FakeDashboard()));
     await tester.pumpAndSettle();
     expect(find.text('Iniciar sesión'), findsWidgets);
     await auth.login('test@example.com', 'password');
     await tester.pumpAndSettle();
     expect(find.text('Resumen'), findsOneWidget);
+    expect(find.text('Rancho de prueba'), findsOneWidget);
+    expect(find.text('3'), findsOneWidget);
     await tester.tap(find.text('Ganado'));
     await tester.pumpAndSettle();
     expect(find.text('Inventario de ganado'), findsOneWidget);
