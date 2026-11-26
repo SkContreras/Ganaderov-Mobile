@@ -61,6 +61,35 @@ pantalla inicial está implementada en `features/dashboard/presentation/`.
 
 ```sh
 flutter pub get
+flutter run \
+  --dart-define=SUPABASE_URL=https://your-project.supabase.co \
+  --dart-define=SUPABASE_PUBLISHABLE_KEY=your-supabase-publishable-key
+```
+
+La aplicación requiere `SUPABASE_URL` y `SUPABASE_PUBLISHABLE_KEY` al iniciarse. Pasa
+los valores de tu proyecto mediante `--dart-define`; no guardes credenciales
+reales en el repositorio. La clave publicable está pensada para clientes, pero los
+permisos deben protegerse con políticas RLS en Supabase.
+
+## Firma de Android para producción
+
+Los builds `release` no usan la firma de depuración. Para firmarlos, crea un
+keystore y configura `android/key.properties` (este archivo está excluido de
+Git) con estos campos:
+
+```properties
+storePassword=...
+keyPassword=...
+keyAlias=...
+storeFile=../upload-keystore.jks
+```
+
+Guarda el keystore y sus contraseñas de forma segura. Sin `key.properties`, el
+build `release` queda sin firmar y no está listo para publicar.
+
+## Validación
+
+```sh
 flutter test
 flutter analyze
 ```
