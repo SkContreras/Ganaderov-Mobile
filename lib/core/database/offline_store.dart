@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'package:uuid/uuid.dart';
+import '../sync/event_protocol.dart';
 import '../sync/event_outbox.dart';
 import '../../features/livestock/domain/event_draft.dart';
 import 'package:drift/drift.dart';
@@ -7,13 +9,24 @@ import '../../features/livestock/domain/inventory.dart';
 
 class OfflineStore extends GeneratedDatabase {
   OfflineStore([QueryExecutor? executor]):super(executor??driftDatabase(name:'ganaderov_local'));
-  @override int get schemaVersion=>2;
+  @override int get schemaVersion=>3;
   @override Iterable<TableInfo<Table,Object?>> get allTables=>const [];
   @override List<DatabaseSchemaEntity> get allSchemaEntities=>const [];
   @override MigrationStrategy get migration=>MigrationStrategy(onCreate:(_)async{
     await customStatement('CREATE TABLE inventory_cache (user_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, saved_at INTEGER NOT NULL, payload TEXT NOT NULL)');
     await _createOutbox();
-  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();});
+    await _upgradeProtocol();
+  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();});
+  Future<void> _upgradeProtocol()async{
+    await customStatement("ALTER TABLE event_outbox ADD COLUMN operation TEXT");
+    await customStatement("ALTER TABLE event_outbox ADD COLUMN state TEXT NOT NULL DEFAULT 'pending'");
+    await customStatement("ALTER TABLE event_outbox ADD COLUMN receipt TEXT");
+    await customStatement('CREATE TABLE sync_installation (id INTEGER PRIMARY KEY CHECK(id=1), device_id TEXT NOT NULL)');
+  }
+  Future<String> _deviceId()async{
+    await customStatement('INSERT OR IGNORE INTO sync_installation(id,device_id) VALUES(1,?)',[const Uuid().v4()]);
+    return (await customSelect('SELECT device_id FROM sync_installation WHERE id=1').getSingle()).read<String>('device_id');
+  }
   Future<void> _createOutbox()=>customStatement('CREATE TABLE event_outbox (user_id TEXT NOT NULL, owner_id TEXT NOT NULL, event_id TEXT NOT NULL, animal_id TEXT NOT NULL, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT \'\', PRIMARY KEY(user_id,owner_id,event_id))');
   Future<void> save(InventorySnapshot s)async{
     if(s.status!='active'||s.userId.isEmpty||s.ownerId.isEmpty||s.offline)throw StateError('Instantánea no válida');
@@ -35,7 +48,7 @@ class OfflineStore extends GeneratedDatabase {
   Future<void> purge(String userId)=>customStatement('DELETE FROM inventory_cache WHERE user_id=?',[userId]);
   Future<void> purgeAll()=>customStatement('DELETE FROM inventory_cache');
 
-  Future<void> enqueue(PendingEvent p)async{
+  Future<void> enqueue(PendingEvent p,{bool rpc=false})async{
     p.draft.validate();
     final json=jsonEncode(p.draft.toJson());
     await transaction(()async{
@@ -44,13 +57,19 @@ class OfflineStore extends GeneratedDatabase {
         if(rows.first.read<String>('animal_id')!=p.animalId||rows.first.read<String>('payload')!=json)throw StateError('El registro pendiente contiene otros datos.');
         return;
       }
-      await customStatement('INSERT INTO event_outbox(user_id,owner_id,event_id,animal_id,payload) VALUES(?,?,?,?,?)',[p.userId,p.ownerId,p.draft.id,p.animalId,json]);
+      final operation=rpc?jsonEncode(buildEventOperation(p,operationId:const Uuid().v4(),deviceId:await _deviceId())):null;
+      await customStatement('INSERT INTO event_outbox(user_id,owner_id,event_id,animal_id,payload,operation) VALUES(?,?,?,?,?,?)',[p.userId,p.ownerId,p.draft.id,p.animalId,json,operation]);
     });
   }
   Future<List<PendingEvent>> pending(String userId)async{
-    final rows=await customSelect('SELECT * FROM event_outbox WHERE user_id=? ORDER BY rowid',variables:[Variable.withString(userId)]).get();
-    return [for(final row in rows)PendingEvent(userId:userId,ownerId:row.read<String>('owner_id'),animalId:row.read<String>('animal_id'),draft:EventDraft.fromJson(jsonDecode(row.read<String>('payload')) as Map<String,dynamic>),attempts:row.read<int>('attempts'),nextAt:row.read<int>('next_at'),error:row.read<String>('error'))];
+    final rows=await customSelect('SELECT * FROM event_outbox WHERE user_id=? AND state != \'confirmed\' ORDER BY rowid',variables:[Variable.withString(userId)]).get();
+    return [for(final row in rows)PendingEvent(userId:userId,ownerId:row.read<String>('owner_id'),animalId:row.read<String>('animal_id'),draft:EventDraft.fromJson(jsonDecode(row.read<String>('payload')) as Map<String,dynamic>),attempts:row.read<int>('attempts'),nextAt:row.read<int>('next_at'),error:row.read<String>('error'),state:row.read<String>('state'),operation:row.readNullable<String>('operation')==null?null:Map<String,dynamic>.from(jsonDecode(row.read<String>('operation')) as Map))];
+  }
+  Future<void> confirmRpc(PendingEvent p,Map<String,dynamic> receipt)=>customStatement("UPDATE event_outbox SET state='confirmed',receipt=?,error='' WHERE user_id=? AND owner_id=? AND event_id=? AND state='pending'",[jsonEncode(receipt),p.userId,p.ownerId,p.draft.id]);
+  Future<void> stopRpc(PendingEvent p,String state,String code)async{
+    if(!['conflict','rejected'].contains(state))throw ArgumentError.value(state);
+    await customStatement("UPDATE event_outbox SET state=?,error=? WHERE user_id=? AND owner_id=? AND event_id=? AND state='pending'",[state,code,p.userId,p.ownerId,p.draft.id]);
   }
   Future<void> acknowledge(PendingEvent p)=>customStatement('DELETE FROM event_outbox WHERE user_id=? AND owner_id=? AND event_id=?',[p.userId,p.ownerId,p.draft.id]);
-  Future<void> retry(PendingEvent p,String error,int nextAt)=>customStatement('UPDATE event_outbox SET attempts=attempts+1,error=?,next_at=? WHERE user_id=? AND owner_id=? AND event_id=?',[error,nextAt,p.userId,p.ownerId,p.draft.id]);
+  Future<void> retry(PendingEvent p,String error,int nextAt)=>customStatement('UPDATE event_outbox SET attempts=attempts+1,error=?,next_at=? WHERE user_id=? AND owner_id=? AND event_id=? AND state=\'pending\'',[error,nextAt,p.userId,p.ownerId,p.draft.id]);
 }

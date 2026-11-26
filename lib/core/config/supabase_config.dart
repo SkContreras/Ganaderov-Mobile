@@ -1,6 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 abstract final class SupabaseConfig {
+  static const eventRpcEnabled = bool.fromEnvironment('SYNC_EVENT_RPC_V1');
   static const url = String.fromEnvironment('SUPABASE_URL');
   static const publishableKey = String.fromEnvironment(
     'SUPABASE_PUBLISHABLE_KEY',

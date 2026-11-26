@@ -15,7 +15,7 @@ Future<void> main() async {
   await SupabaseConfig.initialize();
   final store=OfflineStore();
   final ranch=SupabaseRanchRepository(Supabase.instance.client);
-  final inventory=SupabaseInventoryRepository(Supabase.instance.client,store:store,onSynced:ranch.invalidate);
+  final inventory=SupabaseInventoryRepository(Supabase.instance.client,store:store,onSynced:ranch.invalidate,eventRpcEnabled:SupabaseConfig.eventRpcEnabled);
   final sync=ForegroundSync(inventory.syncEvents);
   sync.start();
   runApp(ProviderScope(child: GanaderovApp(auth: SupabaseAuthGateway(Supabase.instance.client,clearCache:store.purgeAll), dashboardRepository: SupabaseDashboardRepository(inventory), inventoryRepository: inventory, ranchRepository: ranch)));
