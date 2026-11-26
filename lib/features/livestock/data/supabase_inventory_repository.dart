@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'dart:async';
 import 'dart:io';
+import 'package:http/http.dart' as http;
 import '../../../core/database/offline_store.dart';
 import '../../../core/sync/event_outbox.dart';
 import 'dart:math' as math;
@@ -22,6 +23,12 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final result=await store?.pending(id)??[];
     return client.auth.currentUser?.id==id?result:[];
   }
+  @override Future<void> discardPending(PendingEvent event)async{
+    final id=client.auth.currentUser?.id;
+    if(id==null||id!=event.userId||client.auth.currentSession==null||_syncing)throw StateError('Espera a que termine la sincronización.');
+    _syncing=true;
+    try{await store?.acknowledge(event);}finally{_syncing=false;}
+  }
   @override Future<void> syncEvents({bool manual=false})async{
     final db=store,id=client.auth.currentUser?.id;
     if(db==null||id==null||client.auth.currentSession==null||_syncing)return;
@@ -37,7 +44,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
           changed=true;
         }catch(e){
           final seconds=math.min(900,30*(1<<math.min(p.attempts,5)));
-          final message=e is StateError?e.message.toString():'No se confirmó el envío. Se reintentará.';
+          final message=e is StateError?e.message.toString():e is PostgrestException&&e.code=='42501'?'Permiso denegado. Revisa tu membresía.':'No se confirmó el envío. Se reintentará.';
           await db.retry(p,message,DateTime.now().add(Duration(seconds:seconds)).millisecondsSinceEpoch);
         }
       }
@@ -54,7 +61,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     try {result=await _loadRemote().timeout(const Duration(seconds:25));}
     catch(e){
       if(client.auth.currentUser?.id!=id||client.auth.currentSession==null)rethrow;
-      final network=e is SocketException||e is TimeoutException||e is AuthRetryableFetchException;
+      final network=e is SocketException||e is TimeoutException||e is AuthRetryableFetchException||e is http.ClientException;
       if(!network){await store?.purge(id);rethrow;}
       final cached=await store?.read(id);
       if(cached==null||client.auth.currentUser?.id!=id||client.auth.currentSession==null)rethrow;
@@ -374,5 +381,12 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final payload={...current.payload,'roster':roster,'updatedAt':now};
     final saved=await client.from('journey_sync_records').update({'payload':payload}).eq('owner_id',s.ownerId).eq('journey_id',j.id).eq('updated_at',j.version).select('journey_id').maybeSingle();
     if(saved==null)throw StateError('La jornada cambió durante el guardado.');
+  }
+
+  @override Future<void> finishJourney(InventorySnapshot s,Journey j)async{
+    final c=await _journeyContext(s);
+    if(!['owner','admin'].contains(c['role'])||s.offline)throw StateError('Solo administradores pueden finalizar jornadas.');
+    await client.rpc('finish_mobile_journey',params:{'p_owner_id':s.ownerId,'p_journey_id':j.id,'p_expected_version':j.version});
+    if(client.auth.currentUser?.id==s.userId)onSynced?.call();
   }
 }

@@ -107,7 +107,7 @@ class _DashboardPageState extends State<DashboardPage> {
               final width = (constraints.maxWidth - (columns - 1) * 12) / columns;
               return Wrap(spacing: 12, runSpacing: 12, children: [
                 for (final item in [
-                  ('Animales', Icons.pets_outlined, summary!.total),
+                  ('Animales', Icons.pets_outlined, summary.total),
                   ('Hembras', Icons.female, summary.females),
                   ('Machos', Icons.male, summary.males),
                   ('Con pesaje', Icons.monitor_weight_outlined, summary.weighed),
@@ -115,7 +115,7 @@ class _DashboardPageState extends State<DashboardPage> {
               ]);
             }),
             const SizedBox(height: 16),
-            if (summary!.total == 0) const Text('No hay animales activos sincronizados en este rancho.'),
+            if (summary.total == 0) const Text('No hay animales activos sincronizados en este rancho.'),
             FilledButton.icon(onPressed: () => context.go('/ganado'), icon: const Icon(Icons.pets_outlined), label: const Text('Consultar inventario')),
             const SizedBox(height: 24),
             Text('Actividad reciente', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),

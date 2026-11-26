@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import '../../features/livestock/domain/event_draft.dart';
 import '../../features/livestock/domain/inventory.dart';
@@ -13,6 +12,7 @@ class PendingEvent {
 abstract interface class OutboxAccess {
   Future<List<PendingEvent>> pendingEvents();
   Future<void> syncEvents({bool manual=false});
+  Future<void> discardPending(PendingEvent event);
 }
 abstract class EventOutbox extends ChangeNotifier implements OutboxAccess {}
 class ForegroundSync with WidgetsBindingObserver {
