@@ -35,7 +35,7 @@ abstract final class AppRouter {
         branches: [
           StatefulShellBranch(routes: [GoRoute(path: '/', builder: (context, state) => DashboardPage(repository: dashboardRepository, auth: auth, ranchChanges: ranchRepository))]),
           StatefulShellBranch(routes: [GoRoute(path: '/ganado', builder: (context, state) => LivestockPage(repository: inventoryRepository, auth: auth, ranchChanges: ranchRepository))]),
-          StatefulShellBranch(routes: [GoRoute(path: '/jornadas', builder: (context, state) => const JourneysPage())]),
+          StatefulShellBranch(routes: [GoRoute(path: '/jornadas', builder: (context, state) => JourneysPage(inventory: inventoryRepository, auth: auth, changes: ranchRepository))]),
           StatefulShellBranch(routes: [GoRoute(path: '/analisis', builder: (context, state) => const AnalysisPage())]),
           StatefulShellBranch(routes: [GoRoute(path: '/ajustes', builder: (context, state) => SettingsPage(auth: auth, ranchRepository: ranchRepository))]),
         ],

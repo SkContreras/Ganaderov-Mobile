@@ -2,11 +2,12 @@ import 'dart:typed_data';
 import '../domain/animal_photos.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/inventory.dart';
+import '../../journeys/domain/journey.dart';
 import '../domain/event_draft.dart';
 import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
-class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalPhotos, AnimalEventWriter {
+class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalPhotos, AnimalEventWriter, JourneyRepository {
   const SupabaseInventoryRepository(this.client);
   final SupabaseClient client;
 
@@ -251,5 +252,65 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     }
     final result=await client.from('animal_sync_records').update({'payload':payload}).eq('owner_id',snapshot.ownerId).eq('animal_id',animalId).eq('modified_at',row['modified_at'] as String).isFilter('deleted_at',null).select('animal_id').maybeSingle();
     if(result==null)throw StateError('El historial cambió durante el guardado. Reintenta sin cerrar el formulario.');
+  }
+
+  Future<Map<dynamic,dynamic>> _journeyContext(InventorySnapshot s)async{
+    if(s.status!='active'||s.userId.isEmpty||client.auth.currentUser?.id!=s.userId)throw StateError('Sesión inválida.');
+    final c=await client.rpc('get_my_ranch_context');
+    if(client.auth.currentUser?.id!=s.userId||c is! Map||c['status']!='active'||c['owner_id']!=s.ownerId||!['owner','admin','worker'].contains(c['role']))throw StateError('La membresía cambió.');
+    return c;
+  }
+  @override Future<List<Journey>> journeys(InventorySnapshot s)async{
+    await _journeyContext(s);
+    final result=<Journey>[];
+    String? last;
+    while(true){
+      var q=client.from('journey_sync_records').select('journey_id,updated_at,payload').eq('owner_id',s.ownerId);
+      if(last!=null)q=q.gt('journey_id',last);
+      final rows=await q.order('journey_id').limit(200);
+      if(rows.isEmpty)break;
+      for(final row in rows){
+        result.add(Journey(row['journey_id'] as String,row['updated_at'] as String,Map<String,dynamic>.from(row['payload'] as Map)));
+      }
+      last=rows.last['journey_id'] as String;
+    }
+    await _journeyContext(s);
+    result.sort((a,b)=>b.date.compareTo(a.date));
+    return result;
+  }
+  @override Future<void> createJourney(InventorySnapshot s,String id,String type,String date,String product,String dose,String notes,Set<String> animalIds)async{
+    EventDraft(id:id,type:type,date:date,weight:type=='weight'?0:null).validate();
+    await _journeyContext(s);
+    final fresh=await load();
+    if(fresh.ownerId!=s.ownerId||fresh.userId!=s.userId||fresh.status!='active')throw StateError('La membresía cambió.');
+    final roster=fresh.animals.where((a)=>a.active&&animalIds.contains(a.id)).map(Journey.rosterEntry).toList();
+    if(roster.isEmpty||roster.length!=animalIds.length)throw StateError('Actualiza la selección de animales.');
+    final prior=await client.from('journey_sync_records').select('journey_id').eq('owner_id',s.ownerId).eq('journey_id',id).maybeSingle();
+    if(prior!=null)return;
+    final now=DateTime.now().toUtc().toIso8601String();
+    await _journeyContext(s);
+    await client.from('journey_sync_records').insert({'owner_id':s.ownerId,'journey_id':id,'payload':{'id':id,'type':type,'name':'','date':date,'product':product,'dose':dose,'notes':notes,'roster':roster,'status':'in_progress','createdAt':now,'updatedAt':now,'completedAt':null}}).select('journey_id').single();
+  }
+  @override Future<void> attendJourney(InventorySnapshot s,Journey j,String animalId,double? weight)async{
+    final fresh=await load();
+    if(fresh.ownerId!=s.ownerId||fresh.userId!=s.userId||!fresh.animals.any((a)=>a.id==animalId&&a.active))throw StateError('El animal ya no está activo.');
+    final c=await _journeyContext(s);
+    final row=await client.from('journey_sync_records').select('updated_at,payload').eq('owner_id',s.ownerId).eq('journey_id',j.id).maybeSingle();
+    if(row==null||row['updated_at']!=j.version)throw StateError('La jornada cambió. Actualiza antes de continuar.');
+    final current=Journey(j.id,j.version,Map<String,dynamic>.from(row['payload'] as Map));
+    if(!current.open||!eventTypes.containsKey(current.type))throw StateError('Jornada no editable.');
+    final roster=current.roster;
+    final a=roster.where((a)=>a['id']==animalId).firstOrNull;
+    if(a==null)throw StateError('Animal no incluido.');
+    if(current.type=='weight'&&(weight==null||!weight.isFinite||weight<0||weight>100000))throw StateError('Peso inválido.');
+    final user=client.auth.currentUser;
+    if(user==null||user.id!=s.userId||c['display_name'] is! String)throw StateError('Sesión inválida.');
+    final actor={'authUserId':user.id,'email':user.email??'','label':c['display_name']};
+    final now=DateTime.now().toUtc().toIso8601String();
+    if(a['attended']!=true){a['attended']=true;a['attendedAt']=now;a['attendedBy']=actor;}
+    if(current.type=='weight'){a['weight']=weight;a['weightUpdatedAt']=now;a['weightUpdatedBy']=actor;}
+    final payload={...current.payload,'roster':roster,'updatedAt':now};
+    final saved=await client.from('journey_sync_records').update({'payload':payload}).eq('owner_id',s.ownerId).eq('journey_id',j.id).eq('updated_at',j.version).select('journey_id').maybeSingle();
+    if(saved==null)throw StateError('La jornada cambió durante el guardado.');
   }
 }
