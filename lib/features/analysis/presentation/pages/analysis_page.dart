@@ -15,14 +15,14 @@ class AnalysisPage extends StatefulWidget {
 class _AnalysisPageState extends State<AnalysisPage>{
   InventorySnapshot? _snapshot;
   List<InventoryAnimal> _animals=[];
-  String? _id;
+  String? _id,_lot;
   bool _loading=true,_failed=false;
   int _request=0;
   @override void initState(){super.initState();widget.auth.addListener(_changed);widget.changes.addListener(_changed);_load();}
   @override void dispose(){widget.auth.removeListener(_changed);widget.changes.removeListener(_changed);super.dispose();}
   void _changed(){
     if(!mounted)return;
-    if(!widget.auth.signedIn||widget.auth.recovering){_request++;setState((){_snapshot=null;_animals=[];_id=null;_loading=false;_failed=false;});}
+    if(!widget.auth.signedIn||widget.auth.recovering){_request++;setState((){_snapshot=null;_animals=[];_id=null;_lot=null;_loading=false;_failed=false;});}
     else{_load();}
   }
   Future<void> _load()async{
@@ -33,7 +33,7 @@ class _AnalysisPageState extends State<AnalysisPage>{
       final s=await widget.repository.load().timeout(const Duration(seconds:45));
       final animals=s.animals.where((a)=>a.active).toList();
       if(!mounted||request!=_request||!widget.auth.signedIn)return;
-      setState((){_snapshot=s;_animals=animals;if(!animals.any((a)=>a.id==_id))_id=null;});
+      setState((){_snapshot=s;_animals=animals;if(!animals.any((a)=>a.id==_id))_id=null;if(!animals.any((a)=>a.value('lot')==_lot))_lot=null;});
     }catch(_){if(mounted&&request==_request)setState(()=>_failed=true);}
     finally{if(mounted&&request==_request)setState(()=>_loading=false);}
   }
@@ -41,6 +41,9 @@ class _AnalysisPageState extends State<AnalysisPage>{
     final animal=_animals.where((a)=>a.id==_id).firstOrNull;
     final points=animal==null?<WeightPoint>[]:weightHistory(animal);
     final basis=recentGrowth(points);
+    final lots=_animals.map((a)=>a.value('lot')).where((v)=>v.isNotEmpty).toSet().toList()..sort();
+    final lot=_lot==null?null:summarizeLot(_animals,_lot!);
+    final forecasts=animal==null||_snapshot==null?<ForecastView>[]:savedForecasts(_snapshot!,animal.id);
     return SafeArea(top:false,child:RefreshIndicator(onRefresh:_load,child:ListView(physics:const AlwaysScrollableScrollPhysics(),padding:const EdgeInsets.all(20),children:[
       Row(children:[Expanded(child:Text('Análisis ganadero',style:Theme.of(context).textTheme.headlineSmall)),IconButton(tooltip:'Actualizar análisis',onPressed:_loading?null:_load,icon:const Icon(Icons.refresh))]),
       if(_loading)const LinearProgressIndicator(),
@@ -52,6 +55,8 @@ class _AnalysisPageState extends State<AnalysisPage>{
         const SizedBox(height:12),
         DropdownButtonFormField<String>(key:ValueKey(_id),initialValue:_id??'',isExpanded:true,decoration:const InputDecoration(labelText:'Animal',border:OutlineInputBorder()),items:[const DropdownMenuItem(value:'',child:Text('Captura manual')),for(final a in _animals)DropdownMenuItem(value:a.id,child:Text('${a.value('tag')} · ${a.title}',overflow:TextOverflow.ellipsis))],onChanged:(v)=>setState(()=>_id=v==''?null:v)),
         const SizedBox(height:16),
+        DropdownButtonFormField<String>(key:ValueKey('lot-$_lot'),initialValue:_lot??'',isExpanded:true,decoration:const InputDecoration(labelText:'Lote del inventario'),items:[const DropdownMenuItem(value:'',child:Text('Cantidad manual')),for(final l in lots)DropdownMenuItem(value:l,child:Text(l,overflow:TextOverflow.ellipsis))],onChanged:(v)=>setState(()=>_lot=v==''?null:v)),
+        if(lot!=null)Card(child:Padding(padding:const EdgeInsets.all(12),child:Text('Animales activos: ${lot.count} · Con pesaje: ${lot.weighed} · Con GMD: ${lot.withGrowth}\nPeso medio disponible: ${lot.meanWeight?.toStringAsFixed(1)??"—"} kg · GMD media: ${lot.meanGain?.toStringAsFixed(3)??"—"} kg/día'))),
         if(animal!=null)...[
           Text('Evolución del peso',style:Theme.of(context).textTheme.titleLarge),
           if(points.isEmpty)const Text('Sin pesajes válidos.'),
@@ -64,22 +69,28 @@ class _AnalysisPageState extends State<AnalysisPage>{
           if(basis==null)const Text('No hay dos fechas distintas dentro de los últimos 30 días de pesajes para calcular GMD.')
           else Text('GMD medida: ${basis.gain.toStringAsFixed(3)} kg/día · ${basis.days} días · ${basis.points.length} fechas'),
           if(basis?.variable==true)const Text('Aviso: hubo ganancias y pérdidas entre pesajes.'),
+          if(forecasts.isNotEmpty)...[
+            Text('Pronósticos guardados',style:Theme.of(context).textTheme.titleLarge),
+            for(final f in forecasts.take(10))ListTile(title:Text('${f.predicted.toStringAsFixed(1)} kg · ${f.targetDate}'),subtitle:Text(f.actual==null?'Pendiente de evaluación en servidor':'Real: ${f.actual!.toStringAsFixed(1)} kg · ${f.actualDate} · Error: ${f.error!.toStringAsFixed(2)} kg${f.absolutePercent==null?"":" · ${f.absolutePercent!.toStringAsFixed(1)}%"}')),
+          ],
         ],
-        _ScenarioTools(key:ValueKey('$_id-${points.isEmpty?'':points.last.weight}-${basis?.gain}'),initialWeight:points.isEmpty?null:points.last.weight,initialGain:basis?.gain,baseDate:points.isEmpty?null:points.last.date),
+        _ScenarioTools(key:ValueKey('$_id-$_lot-${lot?.count}-${points.isEmpty?'':points.last.weight}-${basis?.gain}'),initialCount:lot?.count,initialTarget:double.tryParse(animal?.value('targetWeightMin')??''),initialWeight:points.isEmpty?null:points.last.weight,initialGain:basis?.gain,baseDate:points.isEmpty?null:points.last.date),
       ],
     ])));
   }
 }
 class _ScenarioTools extends StatefulWidget{
-  const _ScenarioTools({super.key,this.initialWeight,this.initialGain,this.baseDate});
-  final double? initialWeight,initialGain;
+  const _ScenarioTools({super.key,this.initialWeight,this.initialGain,this.baseDate,this.initialCount,this.initialTarget});
+  final double? initialWeight,initialGain,initialTarget;
+  final int? initialCount;
   final DateTime? baseDate;
   @override State<_ScenarioTools> createState()=>_ScenarioToolsState();
 }
 class _ScenarioToolsState extends State<_ScenarioTools>{
   late final _weight=TextEditingController(text:widget.initialWeight?.toStringAsFixed(1)??'');
   late final _gain=TextEditingController(text:widget.initialGain?.toStringAsFixed(3)??'');
-  final _days=TextEditingController(text:'30'),_price=TextEditingController(),_future=TextEditingController(),_cost=TextEditingController(),_target=TextEditingController(),_count=TextEditingController(text:'1'),_ration=TextEditingController(),_feedPrice=TextEditingController();
+  final _days=TextEditingController(text:'30'),_price=TextEditingController(),_future=TextEditingController(),_cost=TextEditingController(),_ration=TextEditingController(),_feedPrice=TextEditingController();
+  late final _target=TextEditingController(text:widget.initialTarget?.toString()??''),_count=TextEditingController(text:(widget.initialCount??1).toString());
   @override void dispose(){for(final c in [_weight,_gain,_days,_price,_future,_cost,_target,_count,_ration,_feedPrice]){c.dispose();}super.dispose();}
   double? _n(TextEditingController c){final v=double.tryParse(c.text.trim().replaceAll(',','.'));return v!=null&&v.isFinite?v:null;}
   Widget _field(String label,TextEditingController c)=>Padding(padding:const EdgeInsets.only(top:10),child:TextField(controller:c,keyboardType:const TextInputType.numberWithOptions(decimal:true,signed:true),onChanged:(_)=>setState((){}),decoration:InputDecoration(labelText:label,border:const OutlineInputBorder())));
@@ -114,6 +125,11 @@ class _ScenarioToolsState extends State<_ScenarioTools>{
         if(result.breakCost!=null)Text('Costo diario de equilibrio: ${money(result.breakCost!)}/día'),
       ]))),
       const SizedBox(height:20),
+      if(result!=null)...[
+        Text('Comparación de plazos',style:Theme.of(context).textTheme.titleLarge),
+        const Text('Mismo precio futuro, GMD y costo diario para todos los plazos.'),
+        for(final period in compareSalePeriods(result,[30,60,90,result.days]))ListTile(title:Text('${period.days} días · ${period.projected.toStringAsFixed(1)} kg'),trailing:Text(money(period.net))),
+      ],
       Text('Alimentación y lote',style:Theme.of(context).textTheme.titleLarge),
       _field('Número de animales',_count),_field('Ración kg/animal/día',_ration),_field('Precio del alimento por kg',_feedPrice),
       if(feed)Card(child:Padding(padding:const EdgeInsets.all(16),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
