@@ -99,6 +99,10 @@ class InventorySnapshot {
   }
 }
 
+abstract interface class AnimalLifecycleWriter {
+  Future<void> setAnimalStatus(InventorySnapshot snapshot,String animalId,String status);
+}
+
 abstract interface class AnimalWriter {
   Future<void> saveAnimal(InventorySnapshot original, String? id, Map<String, dynamic> changes);
 }

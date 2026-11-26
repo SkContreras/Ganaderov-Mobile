@@ -14,7 +14,7 @@ import '../domain/event_draft.dart';
 import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
-class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalPhotos, AnimalEventWriter, JourneyRepository, OutboxAccess {
+class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalLifecycleWriter, AnimalPhotos, AnimalPhotoRemoval, AnimalEventWriter, JourneyRepository, OutboxAccess {
   SupabaseInventoryRepository(this.client,{this.store,this.onSynced,this.eventRpcEnabled=false,this.journeyRpcEnabled=false});
   final bool journeyRpcEnabled;
   @override bool get supportsJourneyResume=>journeyRpcEnabled;
@@ -244,6 +244,19 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     }
   }
 
+  @override
+  Future<void> setAnimalStatus(InventorySnapshot snapshot,String animalId,String status) async {
+    if(!snapshot.canManage)throw StateError('Solo administradores pueden modificar el estado.');
+    final before=snapshot.animals.where((a)=>a.id==animalId).firstOrNull;
+    if(before==null)throw StateError('Animal no encontrado.');
+    final config=AnimalFormConfig(snapshot.config);
+    if(!config.choices('status').containsKey(status)||before.active==config.active(status))throw StateError('Selecciona un estado válido para esta transición.');
+    // Reuse configured required fields, version and membership checks. Do not
+    // bypass the form if a reason for archiving is required.
+    await saveAnimal(snapshot,animalId,{'status':status});
+    onSynced?.call();
+  }
+
   Future<Map<dynamic,dynamic>> _photoContext(InventorySnapshot snapshot,{required bool write}) async {
     if(snapshot.ownerId.isEmpty || snapshot.userId.isEmpty || client.auth.currentUser?.id!=snapshot.userId) throw StateError('La sesión cambió.');
     final context=await client.rpc('get_my_ranch_context');
@@ -305,6 +318,22 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final photos=_photoList(row);
     if(!photos.any((p)=>p['id']==photoId&&p['animalId']==animalId)) throw StateError('Fotografía no encontrada.');
     for(final p in photos){p['primary']=p['id']==photoId;}
+    await _writePhotos(snapshot,animalId,row,photos);
+  }
+
+  @override
+  Future<void> removePhoto(InventorySnapshot snapshot,String animalId,String photoId) async {
+    final row=await _photoRow(snapshot,animalId);
+    final photos=_photoList(row);
+    final matches=photos.where((p)=>p['id']==photoId&&p['animalId']==animalId&&p['storagePath']=='${snapshot.ownerId}/$animalId/$photoId').toList();
+    if(matches.length!=1)throw StateError('Fotografía no encontrada o inválida.');
+    final wasPrimary=matches.single['primary']==true;
+    photos.remove(matches.single);
+    if(wasPrimary&&photos.isNotEmpty){
+      for(var i=0;i<photos.length;i++){photos[i]['primary']=i==0;}
+    }
+    // Only unlink metadata with CAS. Do not delete bytes: a stale client may
+    // still refer to them, and a separate GC policy is required.
     await _writePhotos(snapshot,animalId,row,photos);
   }
 

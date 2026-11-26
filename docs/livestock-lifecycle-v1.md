@@ -1,0 +1,2 @@
+# Paso 12 — gestión móvil de ganado
+Acciones explícitas de archivo/restauración según catálogo configurado; reutilizan saveAnimal con CAS, permisos y campos obligatorios. No eliminan ficha, historial ni fotos. Si exige motivo de baja, usar editor. Quitar foto desvincula metadatos con CAS y reasigna principal si procede; conserva objeto Storage hasta diseñar GC. No añade borrado definitivo. Las operaciones permanecen online y usan esquema legado, no protocolo universal ni outbox de fichas. Pruebas de integración/CI pendientes; no se modifica Supabase.

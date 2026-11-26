@@ -23,6 +23,9 @@ String? imageMime(Uint8List bytes) {
   if(bytes.length>=12 && String.fromCharCodes(bytes.sublist(0,4))=='RIFF' && String.fromCharCodes(bytes.sublist(8,12))=='WEBP') return 'image/webp';
   return null;
 }
+abstract interface class AnimalPhotoRemoval {
+  Future<void> removePhoto(InventorySnapshot snapshot,String animalId,String photoId);
+}
 abstract interface class AnimalPhotos {
   Future<Uint8List> readPhoto(InventorySnapshot snapshot,String animalId,AnimalPhoto photo);
   Future<void> addPhoto(InventorySnapshot snapshot,String animalId,Uint8List bytes,String name);
