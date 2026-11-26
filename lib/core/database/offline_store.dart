@@ -9,14 +9,23 @@ import '../../features/livestock/domain/inventory.dart';
 
 class OfflineStore extends GeneratedDatabase {
   OfflineStore([QueryExecutor? executor]):super(executor??driftDatabase(name:'ganaderov_local'));
-  @override int get schemaVersion=>3;
+  @override int get schemaVersion=>4;
   @override Iterable<TableInfo<Table,Object?>> get allTables=>const [];
   @override List<DatabaseSchemaEntity> get allSchemaEntities=>const [];
   @override MigrationStrategy get migration=>MigrationStrategy(onCreate:(_)async{
     await customStatement('CREATE TABLE inventory_cache (user_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, saved_at INTEGER NOT NULL, payload TEXT NOT NULL)');
     await _createOutbox();
     await _upgradeProtocol();
-  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();});
+    await _createDeliveryLease();
+  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();});
+  Future<void> _createDeliveryLease()=>customStatement('CREATE TABLE sync_delivery_lease (id INTEGER PRIMARY KEY CHECK(id=1), holder TEXT NOT NULL, expires_at INTEGER NOT NULL)');
+  // All RPC senders share this lease. Expiry allows recovery after process death.
+  Future<bool> acquireDeliveryLease(String holder,int now) => transaction(()async{
+    await customStatement('INSERT INTO sync_delivery_lease(id,holder,expires_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET holder=excluded.holder,expires_at=excluded.expires_at WHERE sync_delivery_lease.expires_at<=? OR sync_delivery_lease.holder=excluded.holder',[holder,now+60000,now]);
+    final row=await customSelect('SELECT holder FROM sync_delivery_lease WHERE id=1').getSingle();
+    return row.read<String>('holder')==holder;
+  });
+  Future<void> releaseDeliveryLease(String holder)=>customStatement('DELETE FROM sync_delivery_lease WHERE id=1 AND holder=?',[holder]);
   Future<void> _upgradeProtocol()async{
     await customStatement("ALTER TABLE event_outbox ADD COLUMN operation TEXT");
     await customStatement("ALTER TABLE event_outbox ADD COLUMN state TEXT NOT NULL DEFAULT 'pending'");

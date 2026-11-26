@@ -44,13 +44,16 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     if(db==null||id==null||client.auth.currentSession==null||_syncing)return;
     _syncing=true;
     var changed=false;
+    final holder=const Uuid().v4();
     try{
+      if(!await db.acquireDeliveryLease(holder,DateTime.now().millisecondsSinceEpoch))return;
       for(final p in await db.pending(id)){
         if(client.auth.currentUser?.id!=id||client.auth.currentSession==null)break;
         if(p.state!='pending')continue;
         if(p.operation!=null&&!eventRpcEnabled)continue;
         if(!manual&&p.nextAt>DateTime.now().millisecondsSinceEpoch)continue;
         try{
+          if(!await db.acquireDeliveryLease(holder,DateTime.now().millisecondsSinceEpoch))break;
           if(p.operation!=null){
             final operation=p.operation!;
             final operationId=operation['operationId'];
@@ -80,7 +83,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
           await db.retry(p,message,DateTime.now().add(Duration(seconds:seconds)).millisecondsSinceEpoch);
         }
       }
-    }finally{_syncing=false;if(changed&&client.auth.currentUser?.id==id)onSynced?.call();}
+    }finally{try{await db.releaseDeliveryLease(holder);}finally{_syncing=false;if(changed&&client.auth.currentUser?.id==id)onSynced?.call();}}
   }
   final OfflineStore? store;
   final SupabaseClient client;
