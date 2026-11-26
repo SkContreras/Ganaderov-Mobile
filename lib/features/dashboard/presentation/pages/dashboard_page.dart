@@ -47,7 +47,7 @@ class _DashboardPageState extends State<DashboardPage> {
     try {
       final summary = await widget.repository.load().timeout(const Duration(seconds: 45));
       if (!mounted || request != _request || !widget.auth.signedIn) return;
-      setState(() { _summary = summary; _loadedAt = DateTime.now(); _loading = false; });
+      setState(() { _summary = summary; _loadedAt = summary.cachedAt ?? DateTime.now(); _loading = false; });
     } catch (_) {
       if (!mounted || request != _request) return;
       setState(() { _loading = false; _failed = true; });
@@ -100,7 +100,7 @@ class _DashboardPageState extends State<DashboardPage> {
               TextButton(onPressed:()=>context.go('/ajustes'),child:const Text('Rancho y usuarios')),
             ]))),
           ] else ...[
-            Text('Actualizado a las ${DateFormat('HH:mm').format(_loadedAt!)}', style: theme.textTheme.bodySmall),
+            Text(summary!.offline ? 'Sin conexión · copia del ${DateFormat('dd/MM/yyyy HH:mm').format(_loadedAt!)}' : 'Actualizado a las ${DateFormat('HH:mm').format(_loadedAt!)}', style: theme.textTheme.bodySmall),
             const SizedBox(height: 12),
             LayoutBuilder(builder: (context, constraints) {
               final columns = constraints.maxWidth >= 640 ? 4 : 2;

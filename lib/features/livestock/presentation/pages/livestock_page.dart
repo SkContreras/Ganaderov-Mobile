@@ -78,7 +78,7 @@ class _LivestockPageState extends State<LivestockPage> {
   Future<void> _registerEvent(InventoryAnimal animal,String type)async{
     final snapshot=_snapshot;
     final repository=widget.repository;
-    if(snapshot==null||snapshot.status!='active'||!animal.active||repository is! AnimalEventWriter)return;
+    if(snapshot==null||snapshot.offline||snapshot.status!='active'||!animal.active||repository is! AnimalEventWriter)return;
     final saved=await Navigator.of(context).push<bool>(MaterialPageRoute(builder:(_)=>EventEditor(snapshot:snapshot,animal:animal,writer:repository as AnimalEventWriter,initialType:type)));
     if(!mounted||saved!=true)return;
     if(widget.ranchChanges is RanchRepository)(widget.ranchChanges as RanchRepository).invalidate();
@@ -93,7 +93,7 @@ class _LivestockPageState extends State<LivestockPage> {
     if (selected != null) {
       return PopScope(canPop: false, onPopInvokedWithResult: (didPop, result) {
         if (!didPop) setState(() => _selectedId = null);
-      }, child: _AnimalDetail(animal: selected, onRegister: selected.active && widget.repository is AnimalEventWriter && ['owner','admin','worker'].contains(_snapshot?.role) ? (type) => _registerEvent(selected,type) : null, gallery: widget.repository is AnimalPhotos && _snapshot != null ? AnimalGallery(snapshot: _snapshot!, animal: selected, repository: widget.repository as AnimalPhotos, onChanged: () => _load(keepSelected: selected.id)) : null, onEdit: _snapshot?.canManage == true && widget.repository is AnimalWriter ? () => _edit(selected) : null, onBack: () => setState(() => _selectedId = null)));
+      }, child: _AnimalDetail(animal: selected, onRegister: _snapshot?.offline == false && selected.active && widget.repository is AnimalEventWriter && ['owner','admin','worker'].contains(_snapshot?.role) ? (type) => _registerEvent(selected,type) : null, gallery: widget.repository is AnimalPhotos && _snapshot != null && !_snapshot!.offline ? AnimalGallery(snapshot: _snapshot!, animal: selected, repository: widget.repository as AnimalPhotos, onChanged: () => _load(keepSelected: selected.id)) : null, onEdit: _snapshot?.canManage == true && widget.repository is AnimalWriter ? () => _edit(selected) : null, onBack: () => setState(() => _selectedId = null)));
     }
     return SafeArea(top: false, child: RefreshIndicator(
       onRefresh: _load,
@@ -108,6 +108,7 @@ class _LivestockPageState extends State<LivestockPage> {
                 IconButton(tooltip: 'Actualizar inventario', onPressed: _loading ? null : _load, icon: const Icon(Icons.refresh)),
               ]),
               if (_snapshot?.status == 'active') Text(_snapshot!.ranchName),
+              if (_snapshot?.offline == true) Text('Sin conexión · solo lectura · ${DateFormat('dd/MM HH:mm').format(_snapshot!.cachedAt!)}'),
               if (_snapshot?.canManage == true && widget.repository is AnimalWriter) FilledButton.icon(onPressed: () => _edit(), icon: const Icon(Icons.add), label: const Text('Registrar animal')),
               if (_loading) ...[const SizedBox(height: 16), const LinearProgressIndicator(), const Text('Consultando inventario…')],
               if (_failed) ...[const SizedBox(height: 16), const Text('No se pudo consultar el inventario. Revisa tu conexión.'), TextButton(onPressed: _load, child: const Text('Reintentar'))],

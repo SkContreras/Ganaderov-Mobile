@@ -1,4 +1,7 @@
 import 'dart:typed_data';
+import 'dart:async';
+import 'dart:io';
+import '../../../core/database/offline_store.dart';
 import '../domain/animal_photos.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/inventory.dart';
@@ -8,11 +11,30 @@ import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
 class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalPhotos, AnimalEventWriter, JourneyRepository {
-  const SupabaseInventoryRepository(this.client);
+  const SupabaseInventoryRepository(this.client,{this.store});
+  final OfflineStore? store;
   final SupabaseClient client;
 
   @override
   Future<InventorySnapshot> load() async {
+    final id=client.auth.currentUser?.id;
+    if(id==null||client.auth.currentSession==null)throw StateError('Sesión no disponible');
+    InventorySnapshot result;
+    try {result=await _loadRemote().timeout(const Duration(seconds:25));}
+    catch(e){
+      if(client.auth.currentUser?.id!=id||client.auth.currentSession==null)rethrow;
+      final network=e is SocketException||e is TimeoutException||e is AuthRetryableFetchException;
+      if(!network){await store?.purge(id);rethrow;}
+      final cached=await store?.read(id);
+      if(cached==null||client.auth.currentUser?.id!=id||client.auth.currentSession==null)rethrow;
+      return cached;
+    }
+    if(client.auth.currentUser?.id!=id||client.auth.currentSession==null)throw StateError('La sesión cambió');
+    if(result.status=='active'){await store?.save(result);}else{await store?.purge(id);}
+    if(client.auth.currentUser?.id!=id||client.auth.currentSession==null){await store?.purge(id);throw StateError('La sesión cambió');}
+    return result;
+  }
+  Future<InventorySnapshot> _loadRemote() async {
     final userId = client.auth.currentUser?.id;
     if (userId == null) throw StateError('Sesión no disponible');
     void verifySession() {
@@ -86,7 +108,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
 
   @override
   Future<void> saveAnimal(InventorySnapshot original, String? id, Map<String,dynamic> changes) async {
-    final current = await load();
+    final current = await _loadRemote();
     if (!original.canManage || !current.canManage || current.ownerId != original.ownerId || current.userId != original.userId || current.configRevision != original.configRevision) {
       throw StateError('La sesión, permisos o configuración cambiaron. Actualiza el inventario.');
     }
@@ -221,7 +243,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
   Future<void> addEvent(InventorySnapshot snapshot,String animalId,EventDraft draft) async {
     draft.validate();
     if(snapshot.status!='active'||!['owner','admin','worker'].contains(snapshot.role)||snapshot.userId.isEmpty||client.auth.currentUser?.id!=snapshot.userId)throw StateError('Sesión o permisos inválidos.');
-    final fresh=await load();
+    final fresh=await _loadRemote();
     if(fresh.status!='active'||fresh.ownerId!=snapshot.ownerId||fresh.userId!=snapshot.userId||!['owner','admin','worker'].contains(fresh.role))throw StateError('La membresía cambió.');
     final animal=fresh.animals.where((a)=>a.id==animalId).firstOrNull;
     final row=fresh.records.where((r)=>r['animal_id']==animalId).firstOrNull;
@@ -281,7 +303,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
   @override Future<void> createJourney(InventorySnapshot s,String id,String type,String date,String product,String dose,String notes,Set<String> animalIds)async{
     EventDraft(id:id,type:type,date:date,weight:type=='weight'?0:null).validate();
     await _journeyContext(s);
-    final fresh=await load();
+    final fresh=await _loadRemote();
     if(fresh.ownerId!=s.ownerId||fresh.userId!=s.userId||fresh.status!='active')throw StateError('La membresía cambió.');
     final roster=fresh.animals.where((a)=>a.active&&animalIds.contains(a.id)).map(Journey.rosterEntry).toList();
     if(roster.isEmpty||roster.length!=animalIds.length)throw StateError('Actualiza la selección de animales.');
@@ -292,7 +314,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     await client.from('journey_sync_records').insert({'owner_id':s.ownerId,'journey_id':id,'payload':{'id':id,'type':type,'name':'','date':date,'product':product,'dose':dose,'notes':notes,'roster':roster,'status':'in_progress','createdAt':now,'updatedAt':now,'completedAt':null}}).select('journey_id').single();
   }
   @override Future<void> attendJourney(InventorySnapshot s,Journey j,String animalId,double? weight)async{
-    final fresh=await load();
+    final fresh=await _loadRemote();
     if(fresh.ownerId!=s.ownerId||fresh.userId!=s.userId||!fresh.animals.any((a)=>a.id==animalId&&a.active))throw StateError('El animal ya no está activo.');
     final c=await _journeyContext(s);
     final row=await client.from('journey_sync_records').select('updated_at,payload').eq('owner_id',s.ownerId).eq('journey_id',j.id).maybeSingle();

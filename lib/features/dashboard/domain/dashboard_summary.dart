@@ -14,8 +14,12 @@ class DashboardSummary {
     this.males = 0,
     this.weighed = 0,
     this.activity = const [],
+    this.offline = false,
+    this.cachedAt,
   });
   final String status, ranchName, role;
+  final bool offline;
+  final DateTime? cachedAt;
   final int total, females, males, weighed;
   final List<DashboardActivity> activity;
 
@@ -24,6 +28,7 @@ class DashboardSummary {
     required String role,
     required Iterable<Map<String, dynamic>> records,
     Map<String, bool> statusOptions = const {},
+    bool offline = false, DateTime? cachedAt,
   }) {
     const inactive = {'Vendido', 'Fallecido', 'Baja', 'Otro', 'Otros', 'Desaparecido'};
     final animals = <String, Map<String, dynamic>>{};
@@ -71,7 +76,7 @@ class DashboardSummary {
     }
     recent.sort((a, b) => b.date.compareTo(a.date));
     return DashboardSummary(
-      status: 'active', ranchName: ranchName, role: role,
+      status: 'active', ranchName: ranchName, role: role, offline: offline, cachedAt: cachedAt,
       total: active.length,
       females: active.where((a) => a.value['sex'] == 'Hembra').length,
       males: active.where((a) => a.value['sex'] == 'Macho').length,
