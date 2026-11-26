@@ -52,7 +52,7 @@ class _AnimalGalleryState extends State<AnimalGallery>{
       if(ordered.isNotEmpty) SizedBox(height:120,child:ListView.separated(scrollDirection:Axis.horizontal,itemCount:ordered.length,separatorBuilder:(_,_)=>const SizedBox(width:8),itemBuilder:(context,i){
         final photo=ordered[i];
         return SizedBox(width:100,child:Column(children:[
-          Expanded(child:_PrivatePhoto(key:ValueKey(photo.id),snapshot:widget.snapshot,animalId:widget.animal.id,photo:photo,repository:widget.repository,height:78)),
+          Expanded(child:_PrivatePhoto(key:ValueKey(photo.id),snapshot:widget.snapshot,animalId:widget.animal.id,photo:photo,repository:widget.repository,height:78,thumbnail:true)),
           if(widget.snapshot.canManage)IconButton(tooltip:photo.primary?'Foto principal':'Elegir como principal',onPressed:_busy||photo.primary?null:()=>_run(()async{await widget.repository.primaryPhoto(widget.snapshot,widget.animal.id,photo.id);if(mounted)await widget.onChanged();}),icon:Icon(photo.primary?Icons.star:Icons.star_border)),
         ]));
       })),
@@ -70,21 +70,23 @@ class _AnimalGalleryState extends State<AnimalGallery>{
   }
 }
 class _PrivatePhoto extends StatefulWidget{
-  const _PrivatePhoto({super.key,required this.snapshot,required this.animalId,required this.photo,required this.repository,required this.height});
+  const _PrivatePhoto({super.key,required this.snapshot,required this.animalId,required this.photo,required this.repository,required this.height,this.thumbnail=false});
   final InventorySnapshot snapshot;
   final String animalId;
   final AnimalPhoto photo;
   final AnimalPhotos repository;
   final double height;
+  final bool thumbnail;
   @override State<_PrivatePhoto> createState()=>_PrivatePhotoState();
 }
 class _PrivatePhotoState extends State<_PrivatePhoto>{
   late Future<Uint8List> _bytes;
   @override void initState(){super.initState();_load();}
   void _load(){_bytes=widget.repository.readPhoto(widget.snapshot,widget.animalId,widget.photo);}
+  @override void didUpdateWidget(covariant _PrivatePhoto old){super.didUpdateWidget(old);if(old.snapshot.userId!=widget.snapshot.userId||old.snapshot.ownerId!=widget.snapshot.ownerId||old.animalId!=widget.animalId||old.photo.path!=widget.photo.path){_load();}}
   @override Widget build(BuildContext context)=>SizedBox(height:widget.height,width:double.infinity,child:ClipRRect(borderRadius:BorderRadius.circular(12),child:FutureBuilder<Uint8List>(future:_bytes,builder:(context,s){
     if(s.hasError)return Center(child:IconButton(tooltip:'Reintentar fotografía',onPressed:()=>setState(_load),icon:const Icon(Icons.broken_image_outlined)));
     if(!s.hasData)return const Center(child:CircularProgressIndicator());
-    return InkWell(onTap:()=>showDialog<void>(context:context,builder:(context)=>Dialog(child:InteractiveViewer(child:Image.memory(s.data!,fit:BoxFit.contain)))),child:Image.memory(s.data!,fit:BoxFit.cover,cacheWidth:1200,errorBuilder:(_,_,_)=>const Center(child:Icon(Icons.broken_image_outlined))));
+    return InkWell(onTap:()=>showDialog<void>(context:context,builder:(context)=>Dialog(child:InteractiveViewer(child:Image.memory(s.data!,fit:BoxFit.contain)))),child:Image.memory(s.data!,fit:BoxFit.cover,cacheWidth:widget.thumbnail?320:1200,errorBuilder:(_,_,_)=>const Center(child:Icon(Icons.broken_image_outlined))));
   })));
 }
