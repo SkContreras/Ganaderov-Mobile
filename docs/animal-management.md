@@ -1,0 +1,5 @@
+# Gestión de fichas (online)
+
+Alta y edición de fichas, cambio de estado (archivo/reactivación mediante opciones habilitadas), configuración de campos, listas y módulos. Solo propietario/administrador; se verifica nuevamente el contexto y la revisión de configuración antes de escribir. Actualización condicionada por modified_at para preservar cambios concurrentes; conserva el payload ajeno a animal. No usa upsert para altas. No modifica el esquema ni las RLS.
+
+Limitaciones: no hay garantía transaccional de unicidad de arete o internalId entre clientes concurrentes porque el esquema actual no contiene esa restricción; se verifica el inventario en el cliente como en la web. No hay eliminación definitiva, fotos, registros nuevos de eventos ni modo offline. Se usa formulario único y edad en meses, no réplica exacta del asistente web. Las configuraciones deben estar sincronizadas previamente. Validar altas y edición contra staging o una ficha de prueba, permisos, archivo y reactivación, conflicto con otro dispositivo, conservación del historial y sincronización web. Ejecutar flutter analyze y flutter test antes de fusionar.

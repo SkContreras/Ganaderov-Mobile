@@ -42,8 +42,11 @@ class InventoryAnimal {
 }
 
 class InventorySnapshot {
-  const InventorySnapshot({required this.status, this.ranchName = '', this.role = '', this.records = const [], this.statusOptions = const {}, this.statusLabels = const {}});
-  final String status, ranchName, role;
+  const InventorySnapshot({required this.status, this.ranchName = '', this.role = '', this.records = const [], this.statusOptions = const {}, this.statusLabels = const {}, this.config = const {}, this.ownerId = '', this.userId = '', this.configRevision = 0});
+  final String status, ranchName, role, ownerId, userId;
+  final Map<String, dynamic> config;
+  final int configRevision;
+  bool get canManage => status == 'active' && (role == 'owner' || role == 'admin');
   final List<Map<String, dynamic>> records;
   final Map<String, bool> statusOptions;
   final Map<String, String> statusLabels;
@@ -85,6 +88,10 @@ class InventorySnapshot {
     });
     return result;
   }
+}
+
+abstract interface class AnimalWriter {
+  Future<void> saveAnimal(InventorySnapshot original, String? id, Map<String, dynamic> changes);
 }
 
 abstract interface class InventoryRepository {
