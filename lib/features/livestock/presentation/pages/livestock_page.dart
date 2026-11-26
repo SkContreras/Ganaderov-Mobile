@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:intl/intl.dart';
 import '../../../auth/domain/auth_gateway.dart';
 import '../../domain/inventory.dart';
+import 'animal_editor.dart';
 
 class LivestockPage extends StatefulWidget {
   const LivestockPage({super.key, required this.repository, required this.auth});
@@ -54,6 +55,18 @@ class _LivestockPageState extends State<LivestockPage> {
     }
   }
 
+  Future<void> _edit([InventoryAnimal? animal]) async {
+    final snapshot=_snapshot;
+    final repository=widget.repository;
+    if(snapshot==null||!snapshot.canManage||repository is! AnimalWriter)return;
+    final saved=await Navigator.of(context).push<bool>(MaterialPageRoute(builder:(_)=>AnimalEditor(snapshot:snapshot,writer:repository as AnimalWriter,animal:animal)));
+    if(!mounted)return;
+    if(saved==true){
+      await _load();
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Animal guardado.')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -62,7 +75,7 @@ class _LivestockPageState extends State<LivestockPage> {
     if (selected != null) {
       return PopScope(canPop: false, onPopInvokedWithResult: (didPop, result) {
         if (!didPop) setState(() => _selectedId = null);
-      }, child: _AnimalDetail(animal: selected, onBack: () => setState(() => _selectedId = null)));
+      }, child: _AnimalDetail(animal: selected, onEdit: _snapshot?.canManage == true && widget.repository is AnimalWriter ? () => _edit(selected) : null, onBack: () => setState(() => _selectedId = null)));
     }
     return SafeArea(top: false, child: RefreshIndicator(
       onRefresh: _load,
@@ -77,6 +90,7 @@ class _LivestockPageState extends State<LivestockPage> {
                 IconButton(tooltip: 'Actualizar inventario', onPressed: _loading ? null : _load, icon: const Icon(Icons.refresh)),
               ]),
               if (_snapshot?.status == 'active') Text(_snapshot!.ranchName),
+              if (_snapshot?.canManage == true && widget.repository is AnimalWriter) FilledButton.icon(onPressed: () => _edit(), icon: const Icon(Icons.add), label: const Text('Registrar animal')),
               if (_loading) ...[const SizedBox(height: 16), const LinearProgressIndicator(), const Text('Consultando inventario…')],
               if (_failed) ...[const SizedBox(height: 16), const Text('No se pudo consultar el inventario. Revisa tu conexión.'), TextButton(onPressed: _load, child: const Text('Reintentar'))],
               if (!_loading && !_failed && _snapshot?.status != 'active')
@@ -143,9 +157,10 @@ class _AnimalCard extends StatelessWidget {
 }
 
 class _AnimalDetail extends StatelessWidget {
-  const _AnimalDetail({required this.animal, required this.onBack});
+  const _AnimalDetail({required this.animal, required this.onBack, this.onEdit});
   final InventoryAnimal animal;
   final VoidCallback onBack;
+  final VoidCallback? onEdit;
   static const fields = {
     'tag':'Número de arete','name':'Nombre','sex':'Sexo','breed':'Raza','color':'Color','cross':'Cruza','markings':'Señas particulares',
     'officialId':'Identificador oficial','birthDate':'Fecha de nacimiento','entryDate':'Fecha de ingreso','originType':'Procedencia',
@@ -161,6 +176,7 @@ class _AnimalDetail extends StatelessWidget {
       Align(alignment: Alignment.centerLeft, child: TextButton.icon(onPressed: onBack, icon: const Icon(Icons.arrow_back), label: const Text('Volver al inventario'))),
       Text(animal.title, style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
       Text(animal.statusLabel),
+      if(onEdit!=null) OutlinedButton.icon(onPressed:onEdit,icon:const Icon(Icons.edit),label:const Text('Editar ficha y estado')),
       const SizedBox(height: 12),
       Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('Último peso registrado'),
