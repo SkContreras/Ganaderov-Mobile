@@ -5,17 +5,19 @@ import 'core/theme/app_theme.dart';
 import 'features/auth/domain/auth_gateway.dart';
 import 'features/dashboard/domain/dashboard_summary.dart';
 import 'features/livestock/domain/inventory.dart';
+import 'features/settings/domain/ranch.dart';
 
 class GanaderovApp extends StatefulWidget {
-  const GanaderovApp({super.key, required this.auth, required this.dashboardRepository, required this.inventoryRepository});
+  const GanaderovApp({super.key, required this.auth, required this.dashboardRepository, required this.inventoryRepository, required this.ranchRepository});
   final AuthGateway auth;
   final DashboardRepository dashboardRepository;
   final InventoryRepository inventoryRepository;
+  final RanchRepository ranchRepository;
   @override
   State<GanaderovApp> createState() => _GanaderovAppState();
 }
 class _GanaderovAppState extends State<GanaderovApp> {
-  late final GoRouter _router = AppRouter.create(widget.auth, widget.dashboardRepository, widget.inventoryRepository);
+  late final GoRouter _router = AppRouter.create(widget.auth, widget.dashboardRepository, widget.inventoryRepository, widget.ranchRepository);
   @override
   void dispose() {
     _router.dispose();

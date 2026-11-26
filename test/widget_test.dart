@@ -8,6 +8,16 @@ import 'package:ganaderov/features/dashboard/domain/dashboard_summary.dart';
 
 import 'package:ganaderov/features/livestock/domain/inventory.dart';
 
+import 'package:ganaderov/features/settings/domain/ranch.dart';
+
+class FakeRanch extends RanchRepository {
+  @override Future<RanchContext> load() async => const RanchContext(status:'unassigned');
+  @override Future<void> create(String ranchName,String displayName) async {}
+  @override Future<void> requestAccess(String code,String displayName) async {}
+  @override Future<void> review(RanchContext original,String requestId,bool approve) async {}
+  @override Future<void> revoke(RanchContext original,String workerId) async {}
+}
+
 class FakeInventory implements InventoryRepository {
   @override Future<InventorySnapshot> load() async => const InventorySnapshot(status: 'active', ranchName: 'Rancho de prueba');
 }
@@ -39,7 +49,7 @@ void main() {
   });
   testWidgets('login and logout change protected route', (tester) async {
     final auth = FakeAuth();
-    await tester.pumpWidget(GanaderovApp(auth: auth, dashboardRepository: FakeDashboard(), inventoryRepository: FakeInventory()));
+    await tester.pumpWidget(GanaderovApp(auth: auth, dashboardRepository: FakeDashboard(), inventoryRepository: FakeInventory(), ranchRepository: FakeRanch()));
     await tester.pumpAndSettle();
     expect(find.text('Iniciar sesión'), findsWidgets);
     await auth.login('test@example.com', 'password');
@@ -59,6 +69,8 @@ void main() {
     await tester.tap(find.text('Ajustes'));
     await tester.pumpAndSettle();
     expect(find.text('test@example.com'), findsOneWidget);
+    expect(find.text('Rancho y usuarios'), findsOneWidget);
+    await tester.ensureVisible(find.text('Cerrar sesión'));
     await tester.tap(find.text('Cerrar sesión'));
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsOneWidget);

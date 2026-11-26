@@ -1,0 +1,5 @@
+# Rancho y usuarios
+
+Ajustes > Rancho y usuarios permite crear rancho, solicitar acceso por código, consultar estado pendiente, copiar código, listar miembros y aprobar/rechazar solicitudes o retirar trabajadores. Se reutilizan exclusivamente las cinco RPC del esquema web: get_my_ranch_context, create_my_ranch, request_ranch_access, review_ranch_access_request y revoke_ranch_worker. No hay cambios de tablas ni políticas. Las aprobaciones crean trabajadores; no se permite promover roles, eliminar cuentas, cambiar nombre del rancho ni administrar múltiples ranchos.
+
+Dashboard e inventario se invalidan al completar operaciones locales o actualizar explícitamente la membresía. La aprobación desde otro dispositivo requiere refrescar; no existe escucha realtime. RLS sigue siendo la autoridad para acceso remoto; datos ya cargados pueden permanecer hasta refrescar. Validar en emulador con dos cuentas de prueba, crear rancho, solicitar, aprobar/rechazar, retirar y comprobar que el trabajador no accede tras refrescar. No ejecutar contra miembros reales para pruebas sin autorización.
