@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/widgets.dart';
+import 'core/sync/background_sync.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app.dart';
@@ -18,5 +20,7 @@ Future<void> main() async {
   final inventory=SupabaseInventoryRepository(Supabase.instance.client,store:store,onSynced:ranch.invalidate,eventRpcEnabled:SupabaseConfig.eventRpcEnabled);
   final sync=ForegroundSync(inventory.syncEvents);
   sync.start();
+  // Scheduling failures must not prevent login or local data access.
+  unawaited(configureBackgroundSync().catchError((Object _){}));
   runApp(ProviderScope(child: GanaderovApp(auth: SupabaseAuthGateway(Supabase.instance.client,clearCache:store.purgeAll), dashboardRepository: SupabaseDashboardRepository(inventory), inventoryRepository: inventory, ranchRepository: ranch)));
 }
