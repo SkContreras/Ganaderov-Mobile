@@ -1,0 +1,3 @@
+# Paso 9 — consumidor incremental Android
+
+Reducer puro de páginas del contrato sync_pull_changes en Ganaderov Web. Valida rancho, epoch, cursor contiguo y límites; reconstruye base confirmada separada, procesa borrados físicos y conserva tombstones como registros. No toca outbox. No conectado a SQLite ni repositorio todavía; antes de activar, persistir base/cursor en una transacción, aislar por usuario/rancho y ambiente, preservar pendientes al reiniciar epoch, verificar membresía y probar staging. No se reduce tráfico todavía. Pruebas unitarias añadidas; CI pendiente. El backend sigue como candidata no instalada.
