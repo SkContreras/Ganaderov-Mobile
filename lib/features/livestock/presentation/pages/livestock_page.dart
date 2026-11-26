@@ -3,6 +3,8 @@ import 'package:intl/intl.dart';
 import '../../../auth/domain/auth_gateway.dart';
 import '../../domain/inventory.dart';
 import 'animal_editor.dart';
+import '../../domain/animal_photos.dart';
+import '../widgets/animal_gallery.dart';
 
 class LivestockPage extends StatefulWidget {
   const LivestockPage({super.key, required this.repository, required this.auth});
@@ -40,7 +42,7 @@ class _LivestockPageState extends State<LivestockPage> {
     _search.dispose();
     super.dispose();
   }
-  Future<void> _load() async {
+  Future<void> _load({String? keepSelected}) async {
     final request = ++_request;
     if (!widget.auth.signedIn || widget.auth.recovering) return;
     setState(() { _loading = true; _failed = false; _snapshot = null; _animals = []; _selectedId = null; });
@@ -48,7 +50,7 @@ class _LivestockPageState extends State<LivestockPage> {
       final snapshot = await widget.repository.load().timeout(const Duration(seconds: 45));
       final animals = snapshot.animals;
       if (!mounted || request != _request || !widget.auth.signedIn) return;
-      setState(() { _snapshot = snapshot; _animals = animals; _loading = false; });
+      setState(() { _snapshot = snapshot; _animals = animals; _selectedId = keepSelected; _loading = false; });
     } catch (_) {
       if (!mounted || request != _request) return;
       setState(() { _loading = false; _failed = true; });
@@ -75,7 +77,7 @@ class _LivestockPageState extends State<LivestockPage> {
     if (selected != null) {
       return PopScope(canPop: false, onPopInvokedWithResult: (didPop, result) {
         if (!didPop) setState(() => _selectedId = null);
-      }, child: _AnimalDetail(animal: selected, onEdit: _snapshot?.canManage == true && widget.repository is AnimalWriter ? () => _edit(selected) : null, onBack: () => setState(() => _selectedId = null)));
+      }, child: _AnimalDetail(animal: selected, gallery: widget.repository is AnimalPhotos && _snapshot != null ? AnimalGallery(snapshot: _snapshot!, animal: selected, repository: widget.repository as AnimalPhotos, onChanged: () => _load(keepSelected: selected.id)) : null, onEdit: _snapshot?.canManage == true && widget.repository is AnimalWriter ? () => _edit(selected) : null, onBack: () => setState(() => _selectedId = null)));
     }
     return SafeArea(top: false, child: RefreshIndicator(
       onRefresh: _load,
@@ -157,10 +159,11 @@ class _AnimalCard extends StatelessWidget {
 }
 
 class _AnimalDetail extends StatelessWidget {
-  const _AnimalDetail({required this.animal, required this.onBack, this.onEdit});
+  const _AnimalDetail({required this.animal, required this.onBack, this.onEdit, this.gallery});
   final InventoryAnimal animal;
   final VoidCallback onBack;
   final VoidCallback? onEdit;
+  final Widget? gallery;
   static const fields = {
     'tag':'Número de arete','name':'Nombre','sex':'Sexo','breed':'Raza','color':'Color','cross':'Cruza','markings':'Señas particulares',
     'officialId':'Identificador oficial','birthDate':'Fecha de nacimiento','entryDate':'Fecha de ingreso','originType':'Procedencia',
@@ -176,6 +179,7 @@ class _AnimalDetail extends StatelessWidget {
       Align(alignment: Alignment.centerLeft, child: TextButton.icon(onPressed: onBack, icon: const Icon(Icons.arrow_back), label: const Text('Volver al inventario'))),
       Text(animal.title, style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
       Text(animal.statusLabel),
+      if(gallery!=null) ...[const SizedBox(height:12),gallery!],
       if(onEdit!=null) OutlinedButton.icon(onPressed:onEdit,icon:const Icon(Icons.edit),label:const Text('Editar ficha y estado')),
       const SizedBox(height: 12),
       Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

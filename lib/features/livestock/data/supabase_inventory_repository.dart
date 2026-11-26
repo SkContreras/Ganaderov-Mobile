@@ -1,9 +1,11 @@
+import 'dart:typed_data';
+import '../domain/animal_photos.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/inventory.dart';
 import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
-class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter {
+class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalPhotos {
   const SupabaseInventoryRepository(this.client);
   final SupabaseClient client;
 
@@ -147,5 +149,69 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter {
       final result=await client.from('animal_sync_records').update({'payload':payload}).eq('owner_id',current.ownerId).eq('animal_id',animalId).eq('modified_at',existing['modified_at'] as String).isFilter('deleted_at',null).select('animal_id').maybeSingle();
       if(result==null) throw StateError('La ficha cambió durante el guardado. Actualiza e inténtalo otra vez.');
     }
+  }
+
+  Future<Map<dynamic,dynamic>> _photoContext(InventorySnapshot snapshot,{required bool write}) async {
+    if(snapshot.ownerId.isEmpty || snapshot.userId.isEmpty || client.auth.currentUser?.id!=snapshot.userId) throw StateError('La sesión cambió.');
+    final context=await client.rpc('get_my_ranch_context');
+    if(client.auth.currentUser?.id!=snapshot.userId || context is! Map || context['status']!='active' || context['owner_id']!=snapshot.ownerId || (write && !['owner','admin'].contains(context['role']))) throw StateError('No tienes permiso para esta operación.');
+    return context;
+  }
+
+  @override
+  Future<Uint8List> readPhoto(InventorySnapshot snapshot,String animalId,AnimalPhoto photo) async {
+    await _photoContext(snapshot,write:false);
+    if(!AnimalPhoto.fromSnapshot(snapshot,animalId).any((p)=>p.id==photo.id&&p.path==photo.path)) throw StateError('Fotografía inválida.');
+    final bytes=await client.storage.from('animal-photos').download(photo.path);
+    if(client.auth.currentUser?.id!=snapshot.userId) throw StateError('La sesión cambió.');
+    return bytes;
+  }
+  Future<Map<String,dynamic>> _photoRow(InventorySnapshot snapshot,String animalId) async {
+    if(!snapshot.canManage) throw StateError('No tienes permiso.');
+    await _photoContext(snapshot,write:true);
+    final prior=snapshot.records.where((r)=>r['animal_id']==animalId).firstOrNull;
+    final row=await client.from('animal_sync_records').select('modified_at,payload').eq('owner_id',snapshot.ownerId).eq('animal_id',animalId).isFilter('deleted_at',null).maybeSingle();
+    if(row==null||prior==null||row['modified_at']!=prior['modified_at']||row['modified_at'] is! String) throw StateError('La ficha cambió. Actualiza el inventario.');
+    return row;
+  }
+  Future<void> _writePhotos(InventorySnapshot snapshot,String animalId,Map<String,dynamic> row,List<Map<String,dynamic>> photos) async {
+    final actor=await _photoContext(snapshot,write:true);
+    final payload=Map<String,dynamic>.from(row['payload'] as Map);
+    final animal=Map<String,dynamic>.from(payload['animal'] as Map);
+    final now=DateTime.now().toUtc();
+    final previous=DateTime.tryParse(animal['updatedAt']?.toString()??'');
+    animal['updatedAt']=(previous!=null&&!now.isAfter(previous)?previous.add(const Duration(milliseconds:1)):now).toIso8601String();
+    animal['updatedBy']=actor['display_name']?.toString()??'Usuario autenticado';
+    payload['animal']=animal;
+    payload['photos']=photos;
+    final result=await client.from('animal_sync_records').update({'payload':payload}).eq('owner_id',snapshot.ownerId).eq('animal_id',animalId).eq('modified_at',row['modified_at'] as String).isFilter('deleted_at',null).select('animal_id').maybeSingle();
+    if(result==null) throw StateError('La ficha cambió durante el guardado. Actualiza el inventario.');
+  }
+  List<Map<String,dynamic>> _photoList(Map<String,dynamic> row) {
+    final raw=(row['payload'] as Map)['photos'];
+    if(raw is! List || raw.any((p)=>p is! Map)) throw StateError('Galería inválida.');
+    return raw.map((p)=>Map<String,dynamic>.from(p as Map)).toList();
+  }
+  @override
+  Future<void> addPhoto(InventorySnapshot snapshot,String animalId,Uint8List bytes,String name) async {
+    final mime=imageMime(bytes);
+    if(mime==null||bytes.length>10*1024*1024) throw StateError('Selecciona JPEG, PNG o WebP de hasta 10 MB.');
+    final row=await _photoRow(snapshot,animalId);
+    final photos=_photoList(row);
+    final id=const Uuid().v4();
+    final path='${snapshot.ownerId}/$animalId/$id';
+    await _photoContext(snapshot,write:true);
+    await client.storage.from('animal-photos').uploadBinary(path,bytes,fileOptions:FileOptions(contentType:mime,upsert:false));
+    photos.add({'id':id,'animalId':animalId,'name':name,'mime':mime,'primary':photos.isEmpty,'createdAt':DateTime.now().toUtc().toIso8601String(),'cropX':50,'cropY':50,'storagePath':path});
+    // Never delete after an ambiguous network failure: the row may have committed.
+    await _writePhotos(snapshot,animalId,row,photos);
+  }
+  @override
+  Future<void> primaryPhoto(InventorySnapshot snapshot,String animalId,String photoId) async {
+    final row=await _photoRow(snapshot,animalId);
+    final photos=_photoList(row);
+    if(!photos.any((p)=>p['id']==photoId&&p['animalId']==animalId)) throw StateError('Fotografía no encontrada.');
+    for(final p in photos){p['primary']=p['id']==photoId;}
+    await _writePhotos(snapshot,animalId,row,photos);
   }
 }
