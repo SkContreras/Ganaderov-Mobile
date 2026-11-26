@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ganaderov/app.dart';
+import 'package:ganaderov/features/settings/presentation/pages/settings_page.dart';
 import 'package:ganaderov/core/router/app_router.dart';
 import 'package:ganaderov/features/auth/domain/auth_gateway.dart';
 
@@ -70,12 +71,28 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('test@example.com'), findsOneWidget);
     expect(find.text('Rancho y usuarios'), findsOneWidget);
-    await tester.ensureVisible(find.text('Cerrar sesión'));
-    await tester.tap(find.text('Cerrar sesión'));
+    final logout = find.widgetWithText(OutlinedButton, 'Cerrar sesión');
+    final settingsScroll = find.descendant(
+      of: find.byType(SettingsPage),
+      matching: find.byType(Scrollable),
+    );
+    await tester.scrollUntilVisible(logout, 200, scrollable: settingsScroll);
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
-    await tester.tap(find.text('Salir'));
+    expect(logout.hitTestable(), findsOneWidget);
+    expect(tester.widget<OutlinedButton>(logout).onPressed, isNotNull);
+    await tester.tap(logout.hitTestable());
     await tester.pumpAndSettle();
+    final dialog = find.byType(AlertDialog);
+    expect(dialog, findsOneWidget);
+    expect(auth.signedIn, isTrue);
+    final confirm = find.descendant(
+      of: dialog,
+      matching: find.widgetWithText(FilledButton, 'Salir'),
+    );
+    expect(confirm.hitTestable(), findsOneWidget);
+    await tester.tap(confirm.hitTestable());
+    await tester.pumpAndSettle();
+    expect(auth.signedIn, isFalse);
     expect(find.text('Iniciar sesión'), findsWidgets);
   });
 }
