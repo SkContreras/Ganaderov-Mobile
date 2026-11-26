@@ -40,6 +40,7 @@ class OfflineStore extends GeneratedDatabase {
     final age=DateTime.now().difference(saved);
     if(age.isNegative||age>const Duration(hours:24)){await purge(userId);return null;}
     final p=jsonDecode(row.read<String>('payload')) as Map<String,dynamic>;
+    if(!['owner','admin','worker'].contains(p['role'])||row.read<String>('owner_id').isEmpty){await purge(userId);return null;}
     final s=InventorySnapshot(status:'active',ranchName:p['ranchName'] as String,role:p['role'] as String,userId:userId,ownerId:row.read<String>('owner_id'),records:(p['records'] as List).map((e)=>Map<String,dynamic>.from(e as Map)).toList(),statusOptions:Map<String,bool>.from(p['statusOptions'] as Map),statusLabels:Map<String,String>.from(p['statusLabels'] as Map),config:Map<String,dynamic>.from(p['config'] as Map),configRevision:p['configRevision'] as int,offline:true,cachedAt:saved);
     // Validate shape before exposing cached data.
     s.animals;
@@ -47,6 +48,8 @@ class OfflineStore extends GeneratedDatabase {
   }
   Future<void> purge(String userId)=>customStatement('DELETE FROM inventory_cache WHERE user_id=?',[userId]);
   Future<void> purgeAll()=>customStatement('DELETE FROM inventory_cache');
+  Future<void> retainOnly(String userId)=>customStatement('DELETE FROM inventory_cache WHERE user_id<>?',[userId]);
+  Future<void> invalidateOtherRanch(String userId,String ownerId)=>customStatement('DELETE FROM inventory_cache WHERE user_id=? AND owner_id<>?',[userId,ownerId]);
 
   Future<void> enqueue(PendingEvent p,{bool rpc=false})async{
     p.draft.validate();
