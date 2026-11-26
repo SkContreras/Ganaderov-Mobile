@@ -2,6 +2,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 abstract final class SupabaseConfig {
   static const backgroundSyncEnabled = bool.fromEnvironment('SYNC_BACKGROUND_V1');
+  static const journeyRpcEnabled = bool.fromEnvironment('SYNC_JOURNEY_RPC_V1');
   static const eventRpcEnabled = bool.fromEnvironment('SYNC_EVENT_RPC_V1');
   static const url = String.fromEnvironment('SUPABASE_URL');
   static const publishableKey = String.fromEnvironment(

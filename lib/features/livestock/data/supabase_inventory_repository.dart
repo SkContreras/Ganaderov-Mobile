@@ -15,7 +15,9 @@ import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
 class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalPhotos, AnimalEventWriter, JourneyRepository, OutboxAccess {
-  SupabaseInventoryRepository(this.client,{this.store,this.onSynced,this.eventRpcEnabled=false});
+  SupabaseInventoryRepository(this.client,{this.store,this.onSynced,this.eventRpcEnabled=false,this.journeyRpcEnabled=false});
+  final bool journeyRpcEnabled;
+  @override bool get supportsJourneyResume=>journeyRpcEnabled;
   final bool eventRpcEnabled;
   final void Function()? onSynced;
   bool _syncing=false;
@@ -412,10 +414,22 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     if(saved==null)throw StateError('La jornada cambió durante el guardado.');
   }
 
+  @override Future<void> resumeJourney(InventorySnapshot s,Journey j)async{
+    if(!journeyRpcEnabled||s.offline||j.status!='incomplete'||j.pending==0)throw StateError('La jornada no se puede reanudar.');
+    final c=await _journeyContext(s);
+    if(!['owner','admin'].contains(c['role']))throw StateError('Solo administradores pueden reanudar jornadas.');
+    await client.rpc('resume_ranch_journey_v1',params:{'p_owner_id':s.ownerId,'p_journey_id':j.id,'p_expected_version':j.version});
+    if(client.auth.currentUser?.id==s.userId)onSynced?.call();
+  }
+
   @override Future<void> finishJourney(InventorySnapshot s,Journey j)async{
     final c=await _journeyContext(s);
     if(!['owner','admin'].contains(c['role'])||s.offline)throw StateError('Solo administradores pueden finalizar jornadas.');
-    await client.rpc('finish_mobile_journey',params:{'p_owner_id':s.ownerId,'p_journey_id':j.id,'p_expected_version':j.version});
+    if(journeyRpcEnabled){
+      await client.rpc('finish_ranch_journey_v1',params:{'p_owner_id':s.ownerId,'p_journey_id':j.id,'p_expected_version':j.version,'p_allow_incomplete':j.pending>0});
+    }else{
+      await client.rpc('finish_mobile_journey',params:{'p_owner_id':s.ownerId,'p_journey_id':j.id,'p_expected_version':j.version});
+    }
     if(client.auth.currentUser?.id==s.userId)onSynced?.call();
   }
 }

@@ -17,7 +17,7 @@ Future<void> main() async {
   await SupabaseConfig.initialize();
   final store=OfflineStore();
   final ranch=SupabaseRanchRepository(Supabase.instance.client);
-  final inventory=SupabaseInventoryRepository(Supabase.instance.client,store:store,onSynced:ranch.invalidate,eventRpcEnabled:SupabaseConfig.eventRpcEnabled);
+  final inventory=SupabaseInventoryRepository(Supabase.instance.client,store:store,onSynced:ranch.invalidate,eventRpcEnabled:SupabaseConfig.eventRpcEnabled,journeyRpcEnabled:SupabaseConfig.journeyRpcEnabled);
   final sync=ForegroundSync(inventory.syncEvents);
   sync.start();
   // Scheduling failures must not prevent login or local data access.

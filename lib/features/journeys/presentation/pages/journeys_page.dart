@@ -72,6 +72,12 @@ class _JourneysPageState extends State<JourneysPage>{
     final yes=await showDialog<bool>(context:context,builder:(context)=>AlertDialog(title:const Text('Finalizar jornada'),content:Text('Se generarán los historiales de ${j.attended} animales. Quedarán ${j.pending} pendientes.'),actions:[TextButton(onPressed:()=>Navigator.pop(context,false),child:const Text('Cancelar')),FilledButton(onPressed:()=>Navigator.pop(context,true),child:const Text('Finalizar'))]));
     if(mounted&&yes==true)await _run(()=>repo.finishJourney(s,j));
   }
+  Future<void> _resume(Journey j)async{
+    final s=_snapshot,repo=repository;
+    if(s==null||repo==null||!s.canManage||!repo.supportsJourneyResume)return;
+    final yes=await showDialog<bool>(context:context,builder:(context)=>AlertDialog(title:const Text('Reanudar jornada'),content:Text('Se conservarán ${j.attended} animales atendidos. Podrás continuar con ${j.pending} pendientes.'),actions:[TextButton(onPressed:()=>Navigator.pop(context,false),child:const Text('Cancelar')),FilledButton(onPressed:()=>Navigator.pop(context,true),child:const Text('Reanudar'))]));
+    if(mounted&&yes==true)await _run(()=>repo.resumeJourney(s,j));
+  }
   @override Widget build(BuildContext context){
     final selected=_items.where((j)=>j.id==_selected).firstOrNull;
     return SafeArea(top:false,child:RefreshIndicator(onRefresh:_load,child:ListView(
@@ -106,6 +112,7 @@ class _JourneysPageState extends State<JourneysPage>{
               trailing:selected.open&&eventTypes.containsKey(selected.type)&&(_snapshot?.animals.any((x)=>x.id==a['id']&&x.active)??false)&&(a['attended']!=true||selected.type=='weight')?TextButton(onPressed:_busy?null:()=>_attend(selected,a),child:Text(selected.type=='weight'?'Pesar':'Atender')):null,
             )),
         if(selected.open&&_snapshot?.canManage==true&&eventTypes.containsKey(selected.type))FilledButton(onPressed:_busy?null:()=>_finish(selected),child:const Text('Finalizar jornada')),
+        if(selected.status=='incomplete'&&selected.pending>0&&_snapshot?.canManage==true&&repository?.supportsJourneyResume==true)OutlinedButton(onPressed:_busy?null:()=>_resume(selected),child:const Text('Reanudar jornada')),
         if(selected.open&&_snapshot?.canManage!=true)const Text('Un administrador debe finalizar la jornada.'),
       ],
     ])));

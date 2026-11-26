@@ -19,5 +19,7 @@ abstract interface class JourneyRepository {
   Future<List<Journey>> journeys(InventorySnapshot snapshot);
   Future<void> createJourney(InventorySnapshot snapshot,String id,String type,String date,String product,String dose,String notes,Set<String> animalIds);
   Future<void> finishJourney(InventorySnapshot snapshot,Journey journey);
+  Future<void> resumeJourney(InventorySnapshot snapshot,Journey journey);
+  bool get supportsJourneyResume;
   Future<void> attendJourney(InventorySnapshot snapshot,Journey journey,String animalId,double? weight);
 }
