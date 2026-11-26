@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:material_ui/material_ui.dart';
+import '../../../../core/sync/conflict_review.dart';
 import '../../../../core/sync/event_outbox.dart';
 import '../../../livestock/domain/event_draft.dart';
 
@@ -22,8 +24,21 @@ class _SyncPanelState extends State<SyncPanel>{
     }catch(_){if(mounted)setState(()=>_error='No se pudo consultar la cola.');}
     finally{if(mounted)setState(()=>_busy=false);}
   }
+  Future<void> _inspect(PendingEvent p)async{
+    if(p.operation==null)return;
+    final terminal=['conflict','rejected'].contains(p.state);
+    await showDialog<void>(context:context,builder:(context)=>AlertDialog(
+      title:Text(terminal?'Revisar conflicto':'Revisar operación'),
+      content:SingleChildScrollView(child:Column(crossAxisAlignment:CrossAxisAlignment.start,mainAxisSize:MainAxisSize.min,children:[
+        Text(terminal?conflictExplanation(p.error):'El resultado aún no está confirmado. Conserva el identificador original.'),
+        const SizedBox(height:12),
+        SelectableText(const JsonEncoder.withIndent('  ').convert(p.operation)),
+      ])),
+      actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text('Cerrar'))],
+    ));
+  }
   Future<void> _discard(PendingEvent p)async{
-    final yes=await showDialog<bool>(context:context,builder:(context)=>AlertDialog(title:const Text('Descartar registro local'),content:const Text('Esto elimina la operación pendiente. Si ya llegó al servidor, no elimina el historial remoto. Comprueba antes de volver a registrarla.'),actions:[TextButton(onPressed:()=>Navigator.pop(context,false),child:const Text('Cancelar')),FilledButton(onPressed:()=>Navigator.pop(context,true),child:const Text('Descartar'))]));
+    final yes=await showDialog<bool>(context:context,builder:(context)=>AlertDialog(title:Text(p.operation!=null?'Archivar conflicto':'Descartar registro local'),content:Text(p.operation!=null?'Se ocultará de la cola activa, pero se conservará el cuerpo original en SQLite. No modifica Supabase ni resuelve el conflicto remoto.':'Esto elimina la operación pendiente. Si ya llegó al servidor, no elimina el historial remoto. Comprueba antes de volver a registrarla.'),actions:[TextButton(onPressed:()=>Navigator.pop(context,false),child:const Text('Cancelar')),FilledButton(onPressed:()=>Navigator.pop(context,true),child:const Text('Descartar'))]));
     if(!mounted||yes!=true)return;
     try{await widget.access.discardPending(p);if(mounted)await _refresh();}catch(_){if(mounted)setState(()=>_error='No se pudo descartar. Espera a que termine el envío.');}
   }
@@ -34,7 +49,7 @@ class _SyncPanelState extends State<SyncPanel>{
     if(_error!=null)Text(_error!),
     if(_items!=null)...[
       Text('${_items!.length} registros pendientes'),
-      for(final p in _items!)ListTile(contentPadding:EdgeInsets.zero,title:Text('${eventTypes[p.draft.type]??p.draft.type} · ${p.draft.date}'),subtitle:Text([if(p.draft.weight!=null)'${p.draft.weight} kg',if(p.draft.product.isNotEmpty)p.draft.product,'Animal: ${p.animalId}',if(p.operation!=null)'RPC v1',if(p.state=='conflict')'Conflicto',if(p.state=='rejected')'Rechazado',if(p.error.isNotEmpty)p.error].join(' · ')),trailing:IconButton(tooltip:'Descartar pendiente',onPressed:_busy?null:()=>_discard(p),icon:const Icon(Icons.delete_outline))),
+      for(final p in _items!)ListTile(contentPadding:EdgeInsets.zero,title:Text('${eventTypes[p.draft.type]??p.draft.type} · ${p.draft.date}'),subtitle:Text([if(p.draft.weight!=null)'${p.draft.weight} kg',if(p.draft.product.isNotEmpty)p.draft.product,'Animal: ${p.animalId}',if(p.operation!=null)'RPC v1',if(p.state=='conflict')'Conflicto',if(p.state=='rejected')'Rechazado',if(p.error.isNotEmpty)p.error].join(' · ')),trailing:Wrap(spacing:0,children:[if(p.operation!=null)IconButton(tooltip:'Revisar operación',onPressed:_busy?null:()=>_inspect(p),icon:const Icon(Icons.info_outline)),if(p.operation==null||['conflict','rejected'].contains(p.state))IconButton(tooltip:p.operation==null?'Descartar pendiente':'Archivar conflicto',onPressed:_busy?null:()=>_discard(p),icon:const Icon(Icons.archive_outlined))])),
     ],
     Wrap(spacing:8,children:[TextButton(onPressed:_busy?null:()=>_refresh(),child:const Text('Actualizar estado')),FilledButton.icon(onPressed:_busy?null:()=>_refresh(send:true),icon:const Icon(Icons.sync),label:const Text('Sincronizar ahora'))]),
   ])));

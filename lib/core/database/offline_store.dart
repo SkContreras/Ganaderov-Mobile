@@ -62,13 +62,16 @@ class OfflineStore extends GeneratedDatabase {
     });
   }
   Future<List<PendingEvent>> pending(String userId)async{
-    final rows=await customSelect('SELECT * FROM event_outbox WHERE user_id=? AND state != \'confirmed\' ORDER BY rowid',variables:[Variable.withString(userId)]).get();
+    final rows=await customSelect('SELECT * FROM event_outbox WHERE user_id=? AND state NOT IN (\'confirmed\',\'archived\') ORDER BY rowid',variables:[Variable.withString(userId)]).get();
     return [for(final row in rows)PendingEvent(userId:userId,ownerId:row.read<String>('owner_id'),animalId:row.read<String>('animal_id'),draft:EventDraft.fromJson(jsonDecode(row.read<String>('payload')) as Map<String,dynamic>),attempts:row.read<int>('attempts'),nextAt:row.read<int>('next_at'),error:row.read<String>('error'),state:row.read<String>('state'),operation:row.readNullable<String>('operation')==null?null:Map<String,dynamic>.from(jsonDecode(row.read<String>('operation')) as Map))];
   }
   Future<void> confirmRpc(PendingEvent p,Map<String,dynamic> receipt)=>customStatement("UPDATE event_outbox SET state='confirmed',receipt=?,error='' WHERE user_id=? AND owner_id=? AND event_id=? AND state='pending'",[jsonEncode(receipt),p.userId,p.ownerId,p.draft.id]);
   Future<void> stopRpc(PendingEvent p,String state,String code)async{
     if(!['conflict','rejected'].contains(state))throw ArgumentError.value(state);
     await customStatement("UPDATE event_outbox SET state=?,error=? WHERE user_id=? AND owner_id=? AND event_id=? AND state='pending'",[state,code,p.userId,p.ownerId,p.draft.id]);
+  }
+  Future<void> archiveConflict(PendingEvent p)async{
+    await customStatement("UPDATE event_outbox SET state='archived' WHERE user_id=? AND owner_id=? AND event_id=? AND state IN ('conflict','rejected')",[p.userId,p.ownerId,p.draft.id]);
   }
   Future<void> acknowledge(PendingEvent p)=>customStatement('DELETE FROM event_outbox WHERE user_id=? AND owner_id=? AND event_id=?',[p.userId,p.ownerId,p.draft.id]);
   Future<void> retry(PendingEvent p,String error,int nextAt)=>customStatement('UPDATE event_outbox SET attempts=attempts+1,error=?,next_at=? WHERE user_id=? AND owner_id=? AND event_id=? AND state=\'pending\'',[error,nextAt,p.userId,p.ownerId,p.draft.id]);
