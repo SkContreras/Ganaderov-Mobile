@@ -29,7 +29,12 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final id=client.auth.currentUser?.id;
     if(id==null||id!=event.userId||client.auth.currentSession==null||_syncing)throw StateError('Espera a que termine la sincronización.');
     _syncing=true;
-    try{await store?.acknowledge(event);}finally{_syncing=false;}
+    try{
+      if(event.operation!=null){
+        if(!['conflict','rejected'].contains(event.state))throw StateError('Una operación RPC sin confirmación no se puede descartar.');
+        await store?.archiveConflict(event);
+      }else{await store?.acknowledge(event);}
+    }finally{_syncing=false;}
   }
   @override Future<void> syncEvents({bool manual=false})async{
     final db=store,id=client.auth.currentUser?.id;

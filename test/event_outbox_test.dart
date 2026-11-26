@@ -5,6 +5,21 @@ import 'package:ganaderov/core/sync/event_outbox.dart';
 import 'package:ganaderov/core/sync/event_protocol.dart';
 import 'package:ganaderov/features/livestock/domain/event_draft.dart';
 void main(){
+  test('archiving conflict preserves original identity and prevents resend',()async{
+    final db=OfflineStore(NativeDatabase.memory());
+    addTearDown(db.close);
+    final p=PendingEvent(userId:'u',ownerId:'10000000-0000-4000-8000-000000000001',animalId:'a',draft:EventDraft(id:'20000000-0000-4000-8000-000000000001',type:'weight',date:'2025-01-01',weight:300,capturedAt:DateTime.utc(2025,1,1)));
+    await db.enqueue(p,rpc:true);
+    final first=(await db.pending('u')).single;
+    await db.archiveConflict(first);
+    expect((await db.pending('u')).single.state,'pending');
+    await db.stopRpc(first,'conflict','ENTITY_ID_REUSED');
+    final stopped=(await db.pending('u')).single;
+    await db.archiveConflict(stopped);
+    expect(await db.pending('u'),isEmpty);
+    await db.enqueue(p,rpc:true);
+    expect(await db.pending('u'),isEmpty);
+  });
   test('RPC operation is persisted and reuses identity',()async{
     final db=OfflineStore(NativeDatabase.memory());
     addTearDown(db.close);
