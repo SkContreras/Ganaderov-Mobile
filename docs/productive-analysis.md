@@ -1,0 +1,3 @@
+# Análisis ganadero móvil
+
+Consulta inventario activo mediante el repositorio existente. Promedia pesajes por día, calcula GMD reciente sobre 30 días anteriores al último pesaje, muestra tendencia y avisos de antigüedad/variabilidad. Simulación lineal de peso, objetivo, venta neta y equilibrio, costo de alimentación y escala de lote homogéneo. Captura manual y datos reales; sin escrituras ni migraciones. No replica aún cotizaciones persistentes, umbrales de precio, comparación automática de plazos, selección real de lotes ni evaluación de pronósticos guardados de la web. Los cálculos son escenarios, no garantías. Jornadas pendientes de cierre web no cuentan como eventos. Pruebas unitarias añadidas, ejecutar flutter analyze y flutter test antes de fusionar.
