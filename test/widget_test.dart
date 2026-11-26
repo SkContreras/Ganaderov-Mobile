@@ -1,3 +1,4 @@
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ganaderov/app.dart';
 import 'package:ganaderov/core/router/app_router.dart';
@@ -18,7 +19,9 @@ class FakeAuth extends AuthGateway {
 }
 void main() {
   test('unauthenticated dashboard is protected', () {
-    expect(authRedirect(signedIn: false, recovering: false, path: '/'), '/login');
+    for (final path in ['/', '/ganado', '/jornadas', '/analisis', '/ajustes']) {
+      expect(authRedirect(signedIn: false, recovering: false, path: path), '/login');
+    }
     expect(authRedirect(signedIn: true, recovering: true, path: '/'), '/reset');
     expect(authRedirect(signedIn: true, recovering: false, path: '/login'), '/');
   });
@@ -30,7 +33,22 @@ void main() {
     await auth.login('test@example.com', 'password');
     await tester.pumpAndSettle();
     expect(find.text('Resumen'), findsOneWidget);
-    await auth.logout();
+    await tester.tap(find.text('Ganado'));
+    await tester.pumpAndSettle();
+    expect(find.text('Inventario de ganado'), findsOneWidget);
+    await tester.tap(find.text('Jornadas'));
+    await tester.pumpAndSettle();
+    expect(find.text('Jornadas de campo'), findsOneWidget);
+    await tester.tap(find.text('Análisis'));
+    await tester.pumpAndSettle();
+    expect(find.text('Análisis ganadero'), findsOneWidget);
+    await tester.tap(find.text('Ajustes'));
+    await tester.pumpAndSettle();
+    expect(find.text('test@example.com'), findsOneWidget);
+    await tester.tap(find.text('Cerrar sesión'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await tester.tap(find.text('Salir'));
     await tester.pumpAndSettle();
     expect(find.text('Iniciar sesión'), findsWidgets);
   });

@@ -1,0 +1,57 @@
+import 'package:material_ui/material_ui.dart';
+import '../../../auth/domain/auth_gateway.dart';
+
+class SettingsPage extends StatefulWidget {
+  const SettingsPage({super.key, required this.auth});
+  final AuthGateway auth;
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+class _SettingsPageState extends State<SettingsPage> {
+  bool _busy = false;
+  Future<void> _logout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cerrar sesión'),
+        content: const Text('¿Quieres salir de tu cuenta en este dispositivo?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Salir')),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true || _busy) return;
+    setState(() => _busy = true);
+    try {
+      await widget.auth.logout();
+    } catch (_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo cerrar sesión. Inténtalo de nuevo.')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+  @override
+  Widget build(BuildContext context) => SafeArea(top: false, child: ListView(
+    padding: const EdgeInsets.all(20),
+    children: [
+      Text('Configuración', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
+      const SizedBox(height: 20),
+      ListenableBuilder(listenable: widget.auth, builder: (context, _) => Card(child: ListTile(
+        leading: const CircleAvatar(child: Icon(Icons.person_outline)),
+        title: const Text('Mi cuenta'),
+        subtitle: Text(widget.auth.email ?? 'Sesión activa'),
+      ))),
+      const SizedBox(height: 12),
+      const Card(child: Column(children: [
+        ListTile(leading: Icon(Icons.agriculture), title: Text('Rancho y usuarios'), subtitle: Text('Próximamente')),
+        Divider(height: 1),
+        ListTile(leading: Icon(Icons.tune), title: Text('Preferencias productivas'), subtitle: Text('Próximamente')),
+        Divider(height: 1),
+        ListTile(leading: Icon(Icons.sync), title: Text('Sincronización'), subtitle: Text('Próximamente')),
+      ])),
+      const SizedBox(height: 24),
+      OutlinedButton.icon(onPressed: _busy ? null : _logout, icon: const Icon(Icons.logout), label: const Text('Cerrar sesión')),
+    ],
+  ));
+}
