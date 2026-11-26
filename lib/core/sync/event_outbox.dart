@@ -4,10 +4,12 @@ import '../../features/livestock/domain/event_draft.dart';
 import '../../features/livestock/domain/inventory.dart';
 
 class PendingEvent {
-  const PendingEvent({required this.userId,required this.ownerId,required this.animalId,required this.draft,this.attempts=0,this.error='',this.nextAt=0});
+  const PendingEvent({required this.userId,required this.ownerId,required this.animalId,required this.draft,this.attempts=0,this.error='',this.nextAt=0,this.operation,this.state='pending'});
   final String userId,ownerId,animalId,error;
   final EventDraft draft;
   final int attempts,nextAt;
+  final Map<String,dynamic>? operation;
+  final String state;
 }
 abstract interface class OutboxAccess {
   Future<List<PendingEvent>> pendingEvents();

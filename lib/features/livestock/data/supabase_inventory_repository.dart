@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../../../core/database/offline_store.dart';
 import '../../../core/sync/event_outbox.dart';
+import '../../../core/sync/event_protocol.dart';
 import 'dart:math' as math;
 import '../domain/animal_photos.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -14,7 +15,8 @@ import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
 class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalPhotos, AnimalEventWriter, JourneyRepository, OutboxAccess {
-  SupabaseInventoryRepository(this.client,{this.store,this.onSynced});
+  SupabaseInventoryRepository(this.client,{this.store,this.onSynced,this.eventRpcEnabled=false});
+  final bool eventRpcEnabled;
   final void Function()? onSynced;
   bool _syncing=false;
   @override Future<List<PendingEvent>> pendingEvents()async{
@@ -37,11 +39,33 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     try{
       for(final p in await db.pending(id)){
         if(client.auth.currentUser?.id!=id||client.auth.currentSession==null)break;
+        if(p.state!='pending')continue;
+        if(p.operation!=null&&!eventRpcEnabled)continue;
         if(!manual&&p.nextAt>DateTime.now().millisecondsSinceEpoch)continue;
         try{
-          await _sendEvent(outboxScope(p),p.animalId,p.draft);
-          await db.acknowledge(p);
-          changed=true;
+          if(p.operation!=null){
+            final operation=p.operation!;
+            final operationId=operation['operationId'];
+            if(operationId is! String||operation['ownerId']!=p.ownerId||operation['entityId']!=p.draft.id)throw StateError('Operación local inválida.');
+            final raw=await client.rpc('sync_apply_operation',params:{'p_operation':operation}).timeout(const Duration(seconds:20));
+            if(client.auth.currentUser?.id!=id||client.auth.currentSession==null)break;
+            final receipt=parseEventReceipt(raw,operationId);
+            final status=receipt['status'] as String;
+            if(status=='applied'||status=='duplicate'){
+              await db.confirmRpc(p,receipt);
+              changed=true;
+            }else if(status=='conflict'||status=='rejected'){
+              await db.stopRpc(p,status,receipt['code'] as String);
+            }else{
+              throw StateError('El servidor solicita reintentar.');
+            }
+          }else{
+            // Never convert an already attempted legacy event to RPC:
+            // a previous response could have been lost after server commit.
+            await _sendEvent(outboxScope(p),p.animalId,p.draft);
+            await db.acknowledge(p);
+            changed=true;
+          }
         }catch(e){
           final seconds=math.min(900,30*(1<<math.min(p.attempts,5)));
           final message=e is StateError?e.message.toString():e is PostgrestException&&e.code=='42501'?'Permiso denegado. Revisa tu membresía.':'No se confirmó el envío. Se reintentará.';
@@ -281,10 +305,10 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
   Future<void> addEvent(InventorySnapshot snapshot,String animalId,EventDraft draft) async {
     draft.validate();
     final db=store;
-    if(db==null){await _sendEvent(snapshot,animalId,draft);return;}
+    if(db==null){if(eventRpcEnabled)throw StateError('Almacenamiento local no disponible.');await _sendEvent(snapshot,animalId,draft);return;}
     if(snapshot.status!='active'||!['owner','admin','worker'].contains(snapshot.role)||snapshot.userId.isEmpty||snapshot.ownerId.isEmpty||client.auth.currentSession==null||client.auth.currentUser?.id!=snapshot.userId||!snapshot.animals.any((a)=>a.id==animalId&&a.active))throw StateError('Sesión o animal inválido.');
     if(snapshot.offline&&(snapshot.cachedAt==null||DateTime.now().difference(snapshot.cachedAt!).isNegative||DateTime.now().difference(snapshot.cachedAt!)>const Duration(hours:24)))throw StateError('Actualiza el inventario antes de registrar.');
-    await db.enqueue(PendingEvent(userId:snapshot.userId,ownerId:snapshot.ownerId,animalId:animalId,draft:draft));
+    await db.enqueue(PendingEvent(userId:snapshot.userId,ownerId:snapshot.ownerId,animalId:animalId,draft:draft),rpc:eventRpcEnabled);
     unawaited(syncEvents().catchError((Object _){ }));
   }
   Future<void> _sendEvent(InventorySnapshot snapshot,String animalId,EventDraft draft) async {

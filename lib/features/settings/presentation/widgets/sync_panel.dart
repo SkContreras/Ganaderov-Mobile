@@ -34,7 +34,7 @@ class _SyncPanelState extends State<SyncPanel>{
     if(_error!=null)Text(_error!),
     if(_items!=null)...[
       Text('${_items!.length} registros pendientes'),
-      for(final p in _items!)ListTile(contentPadding:EdgeInsets.zero,title:Text('${eventTypes[p.draft.type]??p.draft.type} · ${p.draft.date}'),subtitle:Text([if(p.draft.weight!=null)'${p.draft.weight} kg',if(p.draft.product.isNotEmpty)p.draft.product,'Animal: ${p.animalId}',if(p.error.isNotEmpty)p.error].join(' · ')),trailing:IconButton(tooltip:'Descartar pendiente',onPressed:_busy?null:()=>_discard(p),icon:const Icon(Icons.delete_outline))),
+      for(final p in _items!)ListTile(contentPadding:EdgeInsets.zero,title:Text('${eventTypes[p.draft.type]??p.draft.type} · ${p.draft.date}'),subtitle:Text([if(p.draft.weight!=null)'${p.draft.weight} kg',if(p.draft.product.isNotEmpty)p.draft.product,'Animal: ${p.animalId}',if(p.operation!=null)'RPC v1',if(p.state=='conflict')'Conflicto',if(p.state=='rejected')'Rechazado',if(p.error.isNotEmpty)p.error].join(' · ')),trailing:IconButton(tooltip:'Descartar pendiente',onPressed:_busy?null:()=>_discard(p),icon:const Icon(Icons.delete_outline))),
     ],
     Wrap(spacing:8,children:[TextButton(onPressed:_busy?null:()=>_refresh(),child:const Text('Actualizar estado')),FilledButton.icon(onPressed:_busy?null:()=>_refresh(send:true),icon:const Icon(Icons.sync),label:const Text('Sincronizar ahora'))]),
   ])));
