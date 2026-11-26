@@ -6,6 +6,12 @@ import 'package:ganaderov/features/auth/domain/auth_gateway.dart';
 
 import 'package:ganaderov/features/dashboard/domain/dashboard_summary.dart';
 
+import 'package:ganaderov/features/livestock/domain/inventory.dart';
+
+class FakeInventory implements InventoryRepository {
+  @override Future<InventorySnapshot> load() async => const InventorySnapshot(status: 'active', ranchName: 'Rancho de prueba');
+}
+
 class FakeDashboard implements DashboardRepository {
   @override Future<DashboardSummary> load() async => const DashboardSummary(status: 'active', ranchName: 'Rancho de prueba', total: 3);
 }
@@ -33,7 +39,7 @@ void main() {
   });
   testWidgets('login and logout change protected route', (tester) async {
     final auth = FakeAuth();
-    await tester.pumpWidget(GanaderovApp(auth: auth, dashboardRepository: FakeDashboard()));
+    await tester.pumpWidget(GanaderovApp(auth: auth, dashboardRepository: FakeDashboard(), inventoryRepository: FakeInventory()));
     await tester.pumpAndSettle();
     expect(find.text('Iniciar sesión'), findsWidgets);
     await auth.login('test@example.com', 'password');

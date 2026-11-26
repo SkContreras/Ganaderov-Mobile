@@ -5,6 +5,7 @@ import '../../features/auth/presentation/pages/auth_page.dart';
 import '../../features/dashboard/presentation/pages/dashboard_page.dart';
 import '../../features/dashboard/domain/dashboard_summary.dart';
 import '../../features/livestock/presentation/pages/livestock_page.dart';
+import '../../features/livestock/domain/inventory.dart';
 import '../../features/journeys/presentation/pages/journeys_page.dart';
 import '../../features/analysis/presentation/pages/analysis_page.dart';
 import '../../features/settings/presentation/pages/settings_page.dart';
@@ -19,7 +20,7 @@ String? authRedirect({required bool signedIn, required bool recovering, required
 }
 
 abstract final class AppRouter {
-  static GoRouter create(AuthGateway auth, DashboardRepository dashboardRepository) => GoRouter(
+  static GoRouter create(AuthGateway auth, DashboardRepository dashboardRepository, InventoryRepository inventoryRepository) => GoRouter(
     refreshListenable: auth,
     redirect: (context, state) => authRedirect(signedIn: auth.signedIn, recovering: auth.recovering, path: state.uri.path),
     routes: [
@@ -32,7 +33,7 @@ abstract final class AppRouter {
         builder: (context, state, shell) => MainShell(navigationShell: shell, auth: auth),
         branches: [
           StatefulShellBranch(routes: [GoRoute(path: '/', builder: (context, state) => DashboardPage(repository: dashboardRepository, auth: auth))]),
-          StatefulShellBranch(routes: [GoRoute(path: '/ganado', builder: (context, state) => const LivestockPage())]),
+          StatefulShellBranch(routes: [GoRoute(path: '/ganado', builder: (context, state) => LivestockPage(repository: inventoryRepository, auth: auth))]),
           StatefulShellBranch(routes: [GoRoute(path: '/jornadas', builder: (context, state) => const JourneysPage())]),
           StatefulShellBranch(routes: [GoRoute(path: '/analisis', builder: (context, state) => const AnalysisPage())]),
           StatefulShellBranch(routes: [GoRoute(path: '/ajustes', builder: (context, state) => SettingsPage(auth: auth))]),
