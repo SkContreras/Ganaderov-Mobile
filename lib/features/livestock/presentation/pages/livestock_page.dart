@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:intl/intl.dart';
 import '../../../auth/domain/auth_gateway.dart';
 import '../../domain/inventory.dart';
+import '../../domain/animal_form_config.dart';
 import 'animal_editor.dart';
 import 'event_editor.dart';
 import '../../domain/event_draft.dart';
@@ -75,6 +76,29 @@ class _LivestockPageState extends State<LivestockPage> {
     }
   }
 
+  bool _statusBusy=false;
+  Future<void> _changeStatus(InventoryAnimal animal)async{
+    final snapshot=_snapshot,repository=widget.repository;
+    if(_statusBusy||snapshot==null||!snapshot.canManage||repository is! AnimalLifecycleWriter)return;
+    final config=AnimalFormConfig(snapshot.config);
+    final choices=config.choices('status').entries.where((e)=>config.active(e.key)!=animal.active).toList();
+    if(choices.isEmpty){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('No hay estados configurados para esta transición.')));return;}
+    final status=await showDialog<String>(context:context,builder:(context)=>SimpleDialog(title:Text(animal.active?'Archivar animal':'Restaurar animal'),children:[
+      const Padding(padding:EdgeInsets.all(16),child:Text('Se conservarán la ficha, fotografías y actividades. Selecciona el nuevo estado.')),
+      for(final e in choices)SimpleDialogOption(onPressed:()=>Navigator.pop(context,e.key),child:Text(e.value)),
+    ]));
+    if(!mounted||status==null||_statusBusy)return;
+    setState(()=>_statusBusy=true);
+    try{
+      await (repository as AnimalLifecycleWriter).setAnimalStatus(snapshot,animal.id,status);
+      if(mounted){_archived=!config.active(status);await _load(keepSelected:animal.id);}
+    }on StateError catch(e){
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('${e.message}. Si falta un motivo, usa Editar ficha y estado.')));
+    }catch(_){
+      if(mounted){await _load(keepSelected:animal.id);if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('No se confirmó el cambio. Revisa el estado antes de repetir.')));}
+    }finally{if(mounted)setState(()=>_statusBusy=false);}
+  }
+
   Future<void> _registerEvent(InventoryAnimal animal,String type)async{
     final snapshot=_snapshot;
     final repository=widget.repository;
@@ -93,7 +117,7 @@ class _LivestockPageState extends State<LivestockPage> {
     if (selected != null) {
       return PopScope(canPop: false, onPopInvokedWithResult: (didPop, result) {
         if (!didPop) setState(() => _selectedId = null);
-      }, child: _AnimalDetail(animal: selected, onRegister: selected.active && widget.repository is AnimalEventWriter && ['owner','admin','worker'].contains(_snapshot?.role) ? (type) => _registerEvent(selected,type) : null, gallery: widget.repository is AnimalPhotos && _snapshot != null && !_snapshot!.offline ? AnimalGallery(snapshot: _snapshot!, animal: selected, repository: widget.repository as AnimalPhotos, onChanged: () => _load(keepSelected: selected.id)) : null, onEdit: _snapshot?.canManage == true && widget.repository is AnimalWriter ? () => _edit(selected) : null, onBack: () => setState(() => _selectedId = null)));
+      }, child: _AnimalDetail(animal: selected, onRegister: selected.active && widget.repository is AnimalEventWriter && ['owner','admin','worker'].contains(_snapshot?.role) ? (type) => _registerEvent(selected,type) : null, gallery: widget.repository is AnimalPhotos && _snapshot != null && !_snapshot!.offline ? AnimalGallery(snapshot: _snapshot!, animal: selected, repository: widget.repository as AnimalPhotos, onChanged: () => _load(keepSelected: selected.id)) : null, onEdit: _snapshot?.canManage == true && widget.repository is AnimalWriter ? () => _edit(selected) : null, onChangeStatus: !_statusBusy && _snapshot?.canManage == true && widget.repository is AnimalLifecycleWriter ? () => _changeStatus(selected) : null, onBack: () => setState(() => _selectedId = null)));
     }
     return SafeArea(top: false, child: RefreshIndicator(
       onRefresh: _load,
@@ -176,10 +200,10 @@ class _AnimalCard extends StatelessWidget {
 }
 
 class _AnimalDetail extends StatelessWidget {
-  const _AnimalDetail({required this.animal, required this.onBack, this.onEdit, this.gallery, this.onRegister});
+  const _AnimalDetail({required this.animal, required this.onBack, this.onEdit, this.gallery, this.onRegister,this.onChangeStatus});
   final InventoryAnimal animal;
   final VoidCallback onBack;
-  final VoidCallback? onEdit;
+  final VoidCallback? onEdit,onChangeStatus;
   final Widget? gallery;
   final ValueChanged<String>? onRegister;
   static const fields = {
@@ -200,6 +224,7 @@ class _AnimalDetail extends StatelessWidget {
       if(onRegister!=null) Wrap(spacing:8,children:[FilledButton.icon(onPressed:()=>onRegister!('weight'),icon:const Icon(Icons.monitor_weight_outlined),label:const Text('Registrar pesaje')),OutlinedButton.icon(onPressed:()=>onRegister!('vaccine'),icon:const Icon(Icons.medical_services_outlined),label:const Text('Registrar tratamiento'))]),
       if(gallery!=null) ...[const SizedBox(height:12),gallery!],
       if(onEdit!=null) OutlinedButton.icon(onPressed:onEdit,icon:const Icon(Icons.edit),label:const Text('Editar ficha y estado')),
+      if(onChangeStatus!=null) OutlinedButton(onPressed:onChangeStatus,child:Text(animal.active?'Archivar animal':'Restaurar animal')),
       const SizedBox(height: 12),
       Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('Último peso registrado'),

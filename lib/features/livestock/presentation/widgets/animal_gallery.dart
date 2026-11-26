@@ -33,6 +33,13 @@ class _AnimalGalleryState extends State<AnimalGallery>{
     await widget.repository.addPhoto(widget.snapshot,widget.animal.id,bytes,file.name);
     if(mounted)await widget.onChanged();
   });
+  Future<void> _remove(AnimalPhoto photo)async{
+    final repository=widget.repository;
+    if(repository is! AnimalPhotoRemoval||_busy)return;
+    final yes=await showDialog<bool>(context:context,builder:(context)=>AlertDialog(title:const Text('Quitar fotografía'),content:const Text('Se quitará de la galería sin borrar físicamente el archivo remoto.'),actions:[TextButton(onPressed:()=>Navigator.pop(context,false),child:const Text('Cancelar')),FilledButton(onPressed:()=>Navigator.pop(context,true),child:const Text('Quitar'))]));
+    if(!mounted||yes!=true)return;
+    await _run(()async{await (repository as AnimalPhotoRemoval).removePhoto(widget.snapshot,widget.animal.id,photo.id);if(mounted)await widget.onChanged();});
+  }
   @override Widget build(BuildContext context){
     final photos=AnimalPhoto.fromSnapshot(widget.snapshot,widget.animal.id);
     final ordered=[...photos.where((p)=>p.primary),...photos.where((p)=>!p.primary)];
@@ -49,6 +56,10 @@ class _AnimalGalleryState extends State<AnimalGallery>{
           if(widget.snapshot.canManage)IconButton(tooltip:photo.primary?'Foto principal':'Elegir como principal',onPressed:_busy||photo.primary?null:()=>_run(()async{await widget.repository.primaryPhoto(widget.snapshot,widget.animal.id,photo.id);if(mounted)await widget.onChanged();}),icon:Icon(photo.primary?Icons.star:Icons.star_border)),
         ]));
       })),
+      if(widget.snapshot.canManage&&widget.repository is AnimalPhotoRemoval&&ordered.isNotEmpty)TextButton(onPressed:_busy?null:()async{
+        final photo=await showDialog<AnimalPhoto>(context:context,builder:(context)=>SimpleDialog(title:const Text('Seleccionar fotografía para quitar'),children:[for(final p in ordered)SimpleDialogOption(onPressed:()=>Navigator.pop(context,p),child:Text(p.name))]));
+        if(mounted&&photo!=null)await _remove(photo);
+      },child:const Text('Quitar fotografía')),
       if(widget.snapshot.canManage)Wrap(spacing:8,children:[
         OutlinedButton.icon(onPressed:_busy?null:()=>_pick(ImageSource.camera),icon:const Icon(Icons.camera_alt_outlined),label:const Text('Cámara')),
         OutlinedButton.icon(onPressed:_busy?null:()=>_pick(ImageSource.gallery),icon:const Icon(Icons.photo_library_outlined),label:const Text('Galería')),
