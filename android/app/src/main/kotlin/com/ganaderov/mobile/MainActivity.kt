@@ -1,4 +1,4 @@
-package com.ganaderov.ganaderov
+package com.ganaderov.mobile
 
 import io.flutter.embedding.android.FlutterActivity
 

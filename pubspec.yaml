@@ -45,7 +45,6 @@ dependencies:
   workmanager: ^0.10.10
   intl: ^0.20.3
   uuid: ^4.6.0
-  material_ui: ^1.11.1
 
 dev_dependencies:
   flutter_test:
