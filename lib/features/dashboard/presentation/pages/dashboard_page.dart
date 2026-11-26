@@ -6,9 +6,10 @@ import '../../../auth/presentation/widgets/ranch_scene.dart';
 import '../../domain/dashboard_summary.dart';
 
 class DashboardPage extends StatefulWidget {
-  const DashboardPage({super.key, required this.repository, required this.auth});
+  const DashboardPage({super.key, required this.repository, required this.auth, required this.ranchChanges});
   final DashboardRepository repository;
   final AuthGateway auth;
+  final Listenable ranchChanges;
   @override
   State<DashboardPage> createState() => _DashboardPageState();
 }
@@ -21,6 +22,7 @@ class _DashboardPageState extends State<DashboardPage> {
   void initState() {
     super.initState();
     widget.auth.addListener(_authChanged);
+    widget.ranchChanges.addListener(_authChanged);
     _load();
   }
   void _authChanged() {
@@ -35,6 +37,7 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void dispose() {
     widget.auth.removeListener(_authChanged);
+    widget.ranchChanges.removeListener(_authChanged);
     super.dispose();
   }
   Future<void> _load() async {
@@ -93,7 +96,8 @@ class _DashboardPageState extends State<DashboardPage> {
           ] else if (!active) ...[
             Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(summary?.status == 'pending' ? 'Solicitud pendiente' : 'Aún no perteneces a un rancho', style: theme.textTheme.titleMedium),
-              Text(summary?.status == 'pending' ? 'Espera la aprobación de un administrador y actualiza esta pantalla.' : 'Crea un rancho o solicita acceso desde Ganaderov Web. La gestión móvil de membresías estará disponible posteriormente.'),
+              Text(summary?.status == 'pending' ? 'Espera la aprobación de un administrador y actualiza esta pantalla.' : 'Crea un rancho o solicita acceso desde Ajustes.'),
+              TextButton(onPressed:()=>context.go('/ajustes'),child:const Text('Rancho y usuarios')),
             ]))),
           ] else ...[
             Text('Actualizado a las ${DateFormat('HH:mm').format(_loadedAt!)}', style: theme.textTheme.bodySmall),

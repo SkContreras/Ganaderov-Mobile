@@ -1,9 +1,12 @@
 import 'package:material_ui/material_ui.dart';
 import '../../../auth/domain/auth_gateway.dart';
+import '../../domain/ranch.dart';
+import '../widgets/ranch_panel.dart';
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, required this.auth});
+  const SettingsPage({super.key, required this.auth, required this.ranchRepository});
   final AuthGateway auth;
+  final RanchRepository ranchRepository;
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
@@ -43,9 +46,9 @@ class _SettingsPageState extends State<SettingsPage> {
         subtitle: Text(widget.auth.email ?? 'Sesión activa'),
       ))),
       const SizedBox(height: 12),
+      RanchPanel(repository: widget.ranchRepository, auth: widget.auth),
+      const SizedBox(height: 12),
       const Card(child: Column(children: [
-        ListTile(leading: Icon(Icons.agriculture), title: Text('Rancho y usuarios'), subtitle: Text('Próximamente')),
-        Divider(height: 1),
         ListTile(leading: Icon(Icons.tune), title: Text('Preferencias productivas'), subtitle: Text('Próximamente')),
         Divider(height: 1),
         ListTile(leading: Icon(Icons.sync), title: Text('Sincronización'), subtitle: Text('Próximamente')),

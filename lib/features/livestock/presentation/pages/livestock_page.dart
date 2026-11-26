@@ -7,9 +7,10 @@ import '../../domain/animal_photos.dart';
 import '../widgets/animal_gallery.dart';
 
 class LivestockPage extends StatefulWidget {
-  const LivestockPage({super.key, required this.repository, required this.auth});
+  const LivestockPage({super.key, required this.repository, required this.auth, required this.ranchChanges});
   final InventoryRepository repository;
   final AuthGateway auth;
+  final Listenable ranchChanges;
   @override
   State<LivestockPage> createState() => _LivestockPageState();
 }
@@ -25,6 +26,7 @@ class _LivestockPageState extends State<LivestockPage> {
   void initState() {
     super.initState();
     widget.auth.addListener(_authChanged);
+    widget.ranchChanges.addListener(_authChanged);
     _load();
   }
   void _authChanged() {
@@ -39,6 +41,7 @@ class _LivestockPageState extends State<LivestockPage> {
   @override
   void dispose() {
     widget.auth.removeListener(_authChanged);
+    widget.ranchChanges.removeListener(_authChanged);
     _search.dispose();
     super.dispose();
   }
