@@ -44,6 +44,7 @@ dependencies:
   flutter_secure_storage: ^11.2.0
   cached_network_image: ^4.0.7
   workmanager: ^0.10.10
+  http: 1.6.0
   intl: ^0.20.3
   uuid: ^4.6.0
 

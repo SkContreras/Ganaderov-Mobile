@@ -22,6 +22,11 @@ class _SyncPanelState extends State<SyncPanel>{
     }catch(_){if(mounted)setState(()=>_error='No se pudo consultar la cola.');}
     finally{if(mounted)setState(()=>_busy=false);}
   }
+  Future<void> _discard(PendingEvent p)async{
+    final yes=await showDialog<bool>(context:context,builder:(context)=>AlertDialog(title:const Text('Descartar registro local'),content:const Text('Esto elimina la operación pendiente. Si ya llegó al servidor, no elimina el historial remoto. Comprueba antes de volver a registrarla.'),actions:[TextButton(onPressed:()=>Navigator.pop(context,false),child:const Text('Cancelar')),FilledButton(onPressed:()=>Navigator.pop(context,true),child:const Text('Descartar'))]));
+    if(!mounted||yes!=true)return;
+    try{await widget.access.discardPending(p);if(mounted)await _refresh();}catch(_){if(mounted)setState(()=>_error='No se pudo descartar. Espera a que termine el envío.');}
+  }
   @override Widget build(BuildContext context)=>Card(child:Padding(padding:const EdgeInsets.all(16),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
     Text('Sincronización',style:Theme.of(context).textTheme.titleMedium),
     const Text('Los registros pendientes se envían automáticamente mientras la app está abierta.'),
@@ -29,7 +34,7 @@ class _SyncPanelState extends State<SyncPanel>{
     if(_error!=null)Text(_error!),
     if(_items!=null)...[
       Text('${_items!.length} registros pendientes'),
-      for(final p in _items!)ListTile(contentPadding:EdgeInsets.zero,title:Text('${eventTypes[p.draft.type]??p.draft.type} · ${p.draft.date}'),subtitle:Text([if(p.draft.weight!=null)'${p.draft.weight} kg',if(p.draft.product.isNotEmpty)p.draft.product,'Animal: ${p.animalId}',if(p.error.isNotEmpty)p.error].join(' · '))),
+      for(final p in _items!)ListTile(contentPadding:EdgeInsets.zero,title:Text('${eventTypes[p.draft.type]??p.draft.type} · ${p.draft.date}'),subtitle:Text([if(p.draft.weight!=null)'${p.draft.weight} kg',if(p.draft.product.isNotEmpty)p.draft.product,'Animal: ${p.animalId}',if(p.error.isNotEmpty)p.error].join(' · ')),trailing:IconButton(tooltip:'Descartar pendiente',onPressed:_busy?null:()=>_discard(p),icon:const Icon(Icons.delete_outline))),
     ],
     Wrap(spacing:8,children:[TextButton(onPressed:_busy?null:()=>_refresh(),child:const Text('Actualizar estado')),FilledButton.icon(onPressed:_busy?null:()=>_refresh(send:true),icon:const Icon(Icons.sync),label:const Text('Sincronizar ahora'))]),
   ])));

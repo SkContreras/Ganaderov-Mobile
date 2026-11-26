@@ -13,6 +13,7 @@ class PendingEvent {
 abstract interface class OutboxAccess {
   Future<List<PendingEvent>> pendingEvents();
   Future<void> syncEvents({bool manual=false});
+  Future<void> discardPending(PendingEvent event);
 }
 abstract class EventOutbox extends ChangeNotifier implements OutboxAccess {}
 class ForegroundSync with WidgetsBindingObserver {
