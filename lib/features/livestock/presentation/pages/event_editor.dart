@@ -16,6 +16,7 @@ class _EventEditorState extends State<EventEditor>{
   final _form=GlobalKey<FormState>();
   final _weight=TextEditingController(),_product=TextEditingController(),_notes=TextEditingController();
   final _id=const Uuid().v4();
+  final _capturedAt=DateTime.now().toUtc();
   late String _type=widget.initialType;
   DateTime _date=DateTime.now();
   bool _busy=false,_uncertain=false;
@@ -23,7 +24,7 @@ class _EventEditorState extends State<EventEditor>{
   @override void dispose(){_weight.dispose();_product.dispose();_notes.dispose();super.dispose();}
   Future<void> _save()async{
     if(_busy||!(_form.currentState?.validate()??false))return;
-    final draft=EventDraft(id:_id,type:_type,date:DateFormat('yyyy-MM-dd').format(_date),weight:_type=='weight'?double.tryParse(_weight.text.trim().replaceAll(',','.')):null,product:_type=='weight'?'':_product.text.trim(),notes:_notes.text.trim());
+    final draft=EventDraft(id:_id,capturedAt:_capturedAt,type:_type,date:DateFormat('yyyy-MM-dd').format(_date),weight:_type=='weight'?double.tryParse(_weight.text.trim().replaceAll(',','.')):null,product:_type=='weight'?'':_product.text.trim(),notes:_notes.text.trim());
     setState((){_busy=true;_error=null;});
     try{
       await widget.writer.addEvent(widget.snapshot,widget.animal.id,draft);
@@ -40,6 +41,7 @@ class _EventEditorState extends State<EventEditor>{
         Text(widget.animal.title,style:Theme.of(context).textTheme.headlineSmall),
         Text('Arete: ${widget.animal.value('tag')}'),
         const SizedBox(height:20),
+        const Text('Se guardará primero en el dispositivo y se enviará cuando haya conexión.'),
         DropdownButtonFormField<String>(initialValue:_type,decoration:const InputDecoration(labelText:'Tipo de registro',border:OutlineInputBorder()),items:[for(final e in eventTypes.entries)DropdownMenuItem(value:e.key,child:Text(e.value))],onChanged:locked?null:(v)=>setState(()=>_type=v!)),
         const SizedBox(height:16),
         OutlinedButton.icon(onPressed:locked?null:()async{

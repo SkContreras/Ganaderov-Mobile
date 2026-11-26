@@ -2,6 +2,8 @@ import 'dart:typed_data';
 import 'dart:async';
 import 'dart:io';
 import '../../../core/database/offline_store.dart';
+import '../../../core/sync/event_outbox.dart';
+import 'dart:math' as math;
 import '../domain/animal_photos.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/inventory.dart';
@@ -10,8 +12,37 @@ import '../domain/event_draft.dart';
 import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
-class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalPhotos, AnimalEventWriter, JourneyRepository {
-  const SupabaseInventoryRepository(this.client,{this.store});
+class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalPhotos, AnimalEventWriter, JourneyRepository, OutboxAccess {
+  SupabaseInventoryRepository(this.client,{this.store,this.onSynced});
+  final void Function()? onSynced;
+  bool _syncing=false;
+  @override Future<List<PendingEvent>> pendingEvents()async{
+    final id=client.auth.currentUser?.id;
+    if(id==null||client.auth.currentSession==null)return [];
+    final result=await store?.pending(id)??[];
+    return client.auth.currentUser?.id==id?result:[];
+  }
+  @override Future<void> syncEvents({bool manual=false})async{
+    final db=store,id=client.auth.currentUser?.id;
+    if(db==null||id==null||client.auth.currentSession==null||_syncing)return;
+    _syncing=true;
+    var changed=false;
+    try{
+      for(final p in await db.pending(id)){
+        if(client.auth.currentUser?.id!=id||client.auth.currentSession==null)break;
+        if(!manual&&p.nextAt>DateTime.now().millisecondsSinceEpoch)continue;
+        try{
+          await _sendEvent(outboxScope(p),p.animalId,p.draft);
+          await db.acknowledge(p);
+          changed=true;
+        }catch(e){
+          final seconds=math.min(900,30*(1<<math.min(p.attempts,5)));
+          final message=e is StateError?e.message.toString():'No se confirmó el envío. Se reintentará.';
+          await db.retry(p,message,DateTime.now().add(Duration(seconds:seconds)).millisecondsSinceEpoch);
+        }
+      }
+    }finally{_syncing=false;if(changed&&client.auth.currentUser?.id==id)onSynced?.call();}
+  }
   final OfflineStore? store;
   final SupabaseClient client;
 
@@ -241,6 +272,15 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
 
   @override
   Future<void> addEvent(InventorySnapshot snapshot,String animalId,EventDraft draft) async {
+    draft.validate();
+    final db=store;
+    if(db==null){await _sendEvent(snapshot,animalId,draft);return;}
+    if(snapshot.status!='active'||!['owner','admin','worker'].contains(snapshot.role)||snapshot.userId.isEmpty||snapshot.ownerId.isEmpty||client.auth.currentSession==null||client.auth.currentUser?.id!=snapshot.userId||!snapshot.animals.any((a)=>a.id==animalId&&a.active))throw StateError('Sesión o animal inválido.');
+    if(snapshot.offline&&(snapshot.cachedAt==null||DateTime.now().difference(snapshot.cachedAt!).isNegative||DateTime.now().difference(snapshot.cachedAt!)>const Duration(hours:24)))throw StateError('Actualiza el inventario antes de registrar.');
+    await db.enqueue(PendingEvent(userId:snapshot.userId,ownerId:snapshot.ownerId,animalId:animalId,draft:draft));
+    unawaited(syncEvents().catchError((Object _){ }));
+  }
+  Future<void> _sendEvent(InventorySnapshot snapshot,String animalId,EventDraft draft) async {
     draft.validate();
     if(snapshot.status!='active'||!['owner','admin','worker'].contains(snapshot.role)||snapshot.userId.isEmpty||client.auth.currentUser?.id!=snapshot.userId)throw StateError('Sesión o permisos inválidos.');
     final fresh=await _loadRemote();

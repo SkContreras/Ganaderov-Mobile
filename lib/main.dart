@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app.dart';
+import 'core/sync/event_outbox.dart';
 import 'core/database/offline_store.dart';
 import 'core/config/supabase_config.dart';
 import 'features/auth/data/supabase_auth_gateway.dart';
@@ -13,6 +14,9 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SupabaseConfig.initialize();
   final store=OfflineStore();
-  final inventory=SupabaseInventoryRepository(Supabase.instance.client,store:store);
-  runApp(ProviderScope(child: GanaderovApp(auth: SupabaseAuthGateway(Supabase.instance.client,clearCache:store.purgeAll), dashboardRepository: SupabaseDashboardRepository(inventory), inventoryRepository: inventory, ranchRepository: SupabaseRanchRepository(Supabase.instance.client))));
+  final ranch=SupabaseRanchRepository(Supabase.instance.client);
+  final inventory=SupabaseInventoryRepository(Supabase.instance.client,store:store,onSynced:ranch.invalidate);
+  final sync=ForegroundSync(inventory.syncEvents);
+  sync.start();
+  runApp(ProviderScope(child: GanaderovApp(auth: SupabaseAuthGateway(Supabase.instance.client,clearCache:store.purgeAll), dashboardRepository: SupabaseDashboardRepository(inventory), inventoryRepository: inventory, ranchRepository: ranch)));
 }

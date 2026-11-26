@@ -1,12 +1,15 @@
 import 'package:material_ui/material_ui.dart';
+import '../../../../core/sync/event_outbox.dart';
+import '../widgets/sync_panel.dart';
 import '../../../auth/domain/auth_gateway.dart';
 import '../../domain/ranch.dart';
 import '../widgets/ranch_panel.dart';
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, required this.auth, required this.ranchRepository});
+  const SettingsPage({super.key, required this.auth, required this.ranchRepository,this.outbox});
   final AuthGateway auth;
   final RanchRepository ranchRepository;
+  final OutboxAccess? outbox;
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
@@ -17,7 +20,7 @@ class _SettingsPageState extends State<SettingsPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Cerrar sesión'),
-        content: const Text('¿Quieres salir de tu cuenta en este dispositivo?'),
+        content: const Text('¿Quieres salir de tu cuenta? Los registros pendientes permanecen guardados para esta cuenta y se enviarán al volver a iniciar sesión.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
           FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Salir')),
@@ -50,9 +53,9 @@ class _SettingsPageState extends State<SettingsPage> {
       const SizedBox(height: 12),
       const Card(child: Column(children: [
         ListTile(leading: Icon(Icons.tune), title: Text('Preferencias productivas'), subtitle: Text('Próximamente')),
-        Divider(height: 1),
-        ListTile(leading: Icon(Icons.sync), title: Text('Sincronización'), subtitle: Text('Próximamente')),
+
       ])),
+      if(widget.outbox!=null)SyncPanel(access:widget.outbox!),
       const SizedBox(height: 24),
       OutlinedButton.icon(onPressed: _busy ? null : _logout, icon: const Icon(Icons.logout), label: const Text('Cerrar sesión')),
     ],
