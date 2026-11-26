@@ -2,10 +2,11 @@ import 'dart:typed_data';
 import '../domain/animal_photos.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/inventory.dart';
+import '../domain/event_draft.dart';
 import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
-class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalPhotos {
+class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalPhotos, AnimalEventWriter {
   const SupabaseInventoryRepository(this.client);
   final SupabaseClient client;
 
@@ -213,5 +214,42 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     if(!photos.any((p)=>p['id']==photoId&&p['animalId']==animalId)) throw StateError('Fotografía no encontrada.');
     for(final p in photos){p['primary']=p['id']==photoId;}
     await _writePhotos(snapshot,animalId,row,photos);
+  }
+
+  @override
+  Future<void> addEvent(InventorySnapshot snapshot,String animalId,EventDraft draft) async {
+    draft.validate();
+    if(snapshot.status!='active'||!['owner','admin','worker'].contains(snapshot.role)||snapshot.userId.isEmpty||client.auth.currentUser?.id!=snapshot.userId)throw StateError('Sesión o permisos inválidos.');
+    final fresh=await load();
+    if(fresh.status!='active'||fresh.ownerId!=snapshot.ownerId||fresh.userId!=snapshot.userId||!['owner','admin','worker'].contains(fresh.role))throw StateError('La membresía cambió.');
+    final animal=fresh.animals.where((a)=>a.id==animalId).firstOrNull;
+    final row=fresh.records.where((r)=>r['animal_id']==animalId).firstOrNull;
+    if(animal==null||!animal.active||row==null||row['modified_at'] is! String)throw StateError('El animal ya no está activo.');
+    final payload=Map<String,dynamic>.from(row['payload'] as Map);
+    final raw=payload['events'];
+    if(raw is! List||raw.any((e)=>e is! Map))throw StateError('Historial inválido.');
+    final events=raw.map((e)=>Map<String,dynamic>.from(e as Map)).toList();
+    final actorContext=await client.rpc('get_my_ranch_context');
+    final user=client.auth.currentUser;
+    if(user==null||user.id!=snapshot.userId||actorContext is! Map||actorContext['owner_id']!=snapshot.ownerId||actorContext['status']!='active'||!['owner','admin','worker'].contains(actorContext['role'])||actorContext['display_name'] is! String)throw StateError('Permisos cambiaron.');
+    final actor=<String,dynamic>{'authUserId':user.id,'email':user.email??'','label':actorContext['display_name']};
+    final prior=events.where((e)=>e['id']==draft.id).firstOrNull;
+    if(prior!=null){
+      if(prior['animalId']==animalId&&prior['type']==draft.type&&prior['date']==draft.date&&(draft.type!='weight'||prior['weight']==draft.weight)&&(prior['label']??'')==draft.product.trim()&&(prior['notes']??'')==draft.notes.trim()&&prior['performedBy'] is Map&&(prior['performedBy'] as Map)['authUserId']==user.id)return;
+      throw StateError('El identificador ya existe con otros datos.');
+    }
+    final now=DateTime.now().toUtc();
+    events.add(draft.toEvent(animalId,actor,now));
+    payload['events']=events;
+    // Worker trigger requires the animal and all other payload fields unchanged.
+    if(actorContext['role']!='worker'){
+      final fields=Map<String,dynamic>.from(payload['animal'] as Map);
+      final previous=DateTime.tryParse(fields['updatedAt']?.toString()??'');
+      fields['updatedAt']=(previous!=null&&!now.isAfter(previous)?previous.add(const Duration(milliseconds:1)):now).toIso8601String();
+      fields['updatedBy']=actor['label'];
+      payload['animal']=fields;
+    }
+    final result=await client.from('animal_sync_records').update({'payload':payload}).eq('owner_id',snapshot.ownerId).eq('animal_id',animalId).eq('modified_at',row['modified_at'] as String).isFilter('deleted_at',null).select('animal_id').maybeSingle();
+    if(result==null)throw StateError('El historial cambió durante el guardado. Reintenta sin cerrar el formulario.');
   }
 }

@@ -1,6 +1,7 @@
 class AnimalEvent {
-  const AnimalEvent({required this.type, required this.date, this.weight, this.notes = ''});
-  final String type, notes;
+  const AnimalEvent({required this.type, required this.date, this.weight, this.notes = '', this.product = '', this.actor = '', this.createdAt});
+  final String type, notes, product, actor;
+  final DateTime? createdAt;
   final DateTime? date;
   final double? weight;
   String get label => switch (type) {
@@ -74,10 +75,16 @@ class InventorySnapshot {
             date: DateTime.tryParse(event['date']?.toString() ?? '') ?? DateTime.tryParse(event['performedAt']?.toString() ?? ''),
             weight: weight != null && weight.isFinite && weight >= 0 ? weight : null,
             notes: event['notes']?.toString() ?? '',
+            product: event['label']?.toString() ?? '',
+            actor: event['performedBy'] is Map ? (event['performedBy'] as Map)['label']?.toString() ?? '' : '',
+            createdAt: DateTime.tryParse(event['createdAt']?.toString() ?? ''),
           ));
         }
       }
-      history.sort((a,b) => (b.date ?? DateTime(1900)).compareTo(a.date ?? DateTime(1900)));
+      history.sort((a,b) {
+        final day=(b.date??DateTime(1900)).compareTo(a.date??DateTime(1900));
+        return day!=0?day:(b.createdAt??DateTime(1900)).compareTo(a.createdAt??DateTime(1900));
+      });
       result.add(InventoryAnimal(id: id, fields: Map.unmodifiable(fields), active: statusOptions[status] ?? !inactive.contains(status), statusLabel: statusLabels[status] ?? labels[status] ?? (status.isEmpty ? 'Sin estado' : status), events: List.unmodifiable(history)));
     }
     result.sort((a,b) {

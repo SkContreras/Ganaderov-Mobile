@@ -3,6 +3,9 @@ import 'package:intl/intl.dart';
 import '../../../auth/domain/auth_gateway.dart';
 import '../../domain/inventory.dart';
 import 'animal_editor.dart';
+import 'event_editor.dart';
+import '../../domain/event_draft.dart';
+import '../../../settings/domain/ranch.dart';
 import '../../domain/animal_photos.dart';
 import '../widgets/animal_gallery.dart';
 
@@ -72,6 +75,16 @@ class _LivestockPageState extends State<LivestockPage> {
     }
   }
 
+  Future<void> _registerEvent(InventoryAnimal animal,String type)async{
+    final snapshot=_snapshot;
+    final repository=widget.repository;
+    if(snapshot==null||snapshot.status!='active'||!animal.active||repository is! AnimalEventWriter)return;
+    final saved=await Navigator.of(context).push<bool>(MaterialPageRoute(builder:(_)=>EventEditor(snapshot:snapshot,animal:animal,writer:repository as AnimalEventWriter,initialType:type)));
+    if(!mounted||saved!=true)return;
+    if(widget.ranchChanges is RanchRepository)(widget.ranchChanges as RanchRepository).invalidate();
+    await _load(keepSelected:animal.id);
+    if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Registro guardado.')));
+  }
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -80,7 +93,7 @@ class _LivestockPageState extends State<LivestockPage> {
     if (selected != null) {
       return PopScope(canPop: false, onPopInvokedWithResult: (didPop, result) {
         if (!didPop) setState(() => _selectedId = null);
-      }, child: _AnimalDetail(animal: selected, gallery: widget.repository is AnimalPhotos && _snapshot != null ? AnimalGallery(snapshot: _snapshot!, animal: selected, repository: widget.repository as AnimalPhotos, onChanged: () => _load(keepSelected: selected.id)) : null, onEdit: _snapshot?.canManage == true && widget.repository is AnimalWriter ? () => _edit(selected) : null, onBack: () => setState(() => _selectedId = null)));
+      }, child: _AnimalDetail(animal: selected, onRegister: selected.active && widget.repository is AnimalEventWriter && ['owner','admin','worker'].contains(_snapshot?.role) ? (type) => _registerEvent(selected,type) : null, gallery: widget.repository is AnimalPhotos && _snapshot != null ? AnimalGallery(snapshot: _snapshot!, animal: selected, repository: widget.repository as AnimalPhotos, onChanged: () => _load(keepSelected: selected.id)) : null, onEdit: _snapshot?.canManage == true && widget.repository is AnimalWriter ? () => _edit(selected) : null, onBack: () => setState(() => _selectedId = null)));
     }
     return SafeArea(top: false, child: RefreshIndicator(
       onRefresh: _load,
@@ -162,11 +175,12 @@ class _AnimalCard extends StatelessWidget {
 }
 
 class _AnimalDetail extends StatelessWidget {
-  const _AnimalDetail({required this.animal, required this.onBack, this.onEdit, this.gallery});
+  const _AnimalDetail({required this.animal, required this.onBack, this.onEdit, this.gallery, this.onRegister});
   final InventoryAnimal animal;
   final VoidCallback onBack;
   final VoidCallback? onEdit;
   final Widget? gallery;
+  final ValueChanged<String>? onRegister;
   static const fields = {
     'tag':'Número de arete','name':'Nombre','sex':'Sexo','breed':'Raza','color':'Color','cross':'Cruza','markings':'Señas particulares',
     'officialId':'Identificador oficial','birthDate':'Fecha de nacimiento','entryDate':'Fecha de ingreso','originType':'Procedencia',
@@ -182,6 +196,7 @@ class _AnimalDetail extends StatelessWidget {
       Align(alignment: Alignment.centerLeft, child: TextButton.icon(onPressed: onBack, icon: const Icon(Icons.arrow_back), label: const Text('Volver al inventario'))),
       Text(animal.title, style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
       Text(animal.statusLabel),
+      if(onRegister!=null) Wrap(spacing:8,children:[FilledButton.icon(onPressed:()=>onRegister!('weight'),icon:const Icon(Icons.monitor_weight_outlined),label:const Text('Registrar pesaje')),OutlinedButton.icon(onPressed:()=>onRegister!('vaccine'),icon:const Icon(Icons.medical_services_outlined),label:const Text('Registrar tratamiento'))]),
       if(gallery!=null) ...[const SizedBox(height:12),gallery!],
       if(onEdit!=null) OutlinedButton.icon(onPressed:onEdit,icon:const Icon(Icons.edit),label:const Text('Editar ficha y estado')),
       const SizedBox(height: 12),
@@ -203,7 +218,7 @@ class _AnimalDetail extends StatelessWidget {
       const SizedBox(height: 20),
       Text('Historial de actividades', style: theme.textTheme.titleLarge),
       if (animal.events.isEmpty) const Text('No hay actividades registradas.'),
-      for (final event in animal.events) ListTile(leading: const Icon(Icons.event_note_outlined), title: Text(event.label), subtitle: Text(event.notes.isEmpty ? _date(event.date) : '${_date(event.date)} · ${event.notes}')),
+      for (final event in animal.events) ListTile(leading: const Icon(Icons.event_note_outlined), title: Text(event.label), subtitle: Text([_date(event.date),event.product,event.notes,event.actor].where((s)=>s.isNotEmpty).join(' · '))),
     ]));
   }
 }
