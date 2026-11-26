@@ -87,7 +87,7 @@ class _ScenarioToolsState extends State<_ScenarioTools>{
   @override Widget build(BuildContext context){
     final w=_n(_weight),g=_n(_gain),d=int.tryParse(_days.text),p=_n(_price),f=_n(_future)??(_future.text.trim().isEmpty?p:null),c=_n(_cost),t=_n(_target),n=int.tryParse(_count.text),ration=_n(_ration),fp=_n(_feedPrice);
     final valid=w!=null&&g!=null&&d!=null&&d>=0&&d<=3650&&w>=0&&(w+g*d).isFinite&&w+g*d>=0;
-    final sale=valid&&p!=null&&f!=null&&c!=null?SaleScenario(weight:w!,gain:g!,days:d!,price:p,futurePrice:f,dailyCost:c):null;
+    final sale=valid&&p!=null&&f!=null&&c!=null?SaleScenario(weight:w,gain:g,days:d,price:p,futurePrice:f,dailyCost:c):null;
     final result=sale?.valid==true?sale:null;
     final target=w!=null&&g!=null&&t!=null?targetDays(w,g,t):null;
     final feed=n!=null&&n>0&&ration!=null&&ration>=0&&fp!=null&&fp>=0&&d!=null&&d>=0&&d<=3650&&(n*ration*fp*d).isFinite;
@@ -96,7 +96,7 @@ class _ScenarioToolsState extends State<_ScenarioTools>{
       Text('Proyección de crecimiento',style:Theme.of(context).textTheme.titleLarge),
       Text(widget.baseDate==null?'Escenario manual: los valores no son mediciones.':'Fecha base: ${DateFormat('dd/MM/yyyy').format(widget.baseDate!)}. Si editas la GMD, será un supuesto.'),
       _field('Peso base (kg)',_weight),_field('GMD (kg/día)',_gain),_field('Plazo (días)',_days),
-      if(valid)Card(child:Padding(padding:const EdgeInsets.all(16),child:Text('Peso proyectado: ${(w!+g!*d!).toStringAsFixed(1)} kg\nFecha objetivo: ${DateFormat('dd/MM/yyyy').format((widget.baseDate??DateTime.now()).add(Duration(days:d!)))}'))),
+      if(valid)Card(child:Padding(padding:const EdgeInsets.all(16),child:Text('Peso proyectado: ${(w+g*d).toStringAsFixed(1)} kg\nFecha objetivo: ${DateFormat('dd/MM/yyyy').format((widget.baseDate??DateTime.now()).add(Duration(days:d)))}'))),
       const SizedBox(height:20),
       Text('Peso objetivo',style:Theme.of(context).textTheme.titleLarge),
       _field('Peso objetivo (kg)',_target),
@@ -117,10 +117,10 @@ class _ScenarioToolsState extends State<_ScenarioTools>{
       Text('Alimentación y lote',style:Theme.of(context).textTheme.titleLarge),
       _field('Número de animales',_count),_field('Ración kg/animal/día',_ration),_field('Precio del alimento por kg',_feedPrice),
       if(feed)Card(child:Padding(padding:const EdgeInsets.all(16),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-        Text('Alimento total: ${(n!*ration!*d!).toStringAsFixed(1)} kg'),
-        Text('Costo por animal/día: ${money(ration!*fp!)}'),
-        Text('Costo total: ${money(n!*ration!*fp!*d!)}'),
-        TextButton(onPressed:()=>setState(()=>_cost.text=(ration!*fp!).toStringAsFixed(2)),child:const Text('Usar como costo diario')),
+        Text('Alimento total: ${(n*ration*d).toStringAsFixed(1)} kg'),
+        Text('Costo por animal/día: ${money(ration*fp)}'),
+        Text('Costo total: ${money(n*ration*fp*d)}'),
+        TextButton(onPressed:()=>setState(()=>_cost.text=(ration*fp).toStringAsFixed(2)),child:const Text('Usar como costo diario')),
       ]))),
       if(result!=null&&n!=null&&n>0&&(result.net*n).isFinite)Text('Diferencia estimada para $n animales iguales: ${money(result.net*n)}'),
       const SizedBox(height:16),

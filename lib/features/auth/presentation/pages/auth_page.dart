@@ -50,7 +50,8 @@ class _AuthPageState extends State<AuthPage> {
     try {
       await action();
     } on AuthException catch (e) {
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _error = true;
         _message = switch (e.code) {
           'invalid_credentials' => 'Correo o contraseña incorrectos.',
@@ -59,7 +60,8 @@ class _AuthPageState extends State<AuthPage> {
           'weak_password' => 'Elige una contraseña más segura.',
           _ => 'No se pudo completar la solicitud. Revisa tus datos e inténtalo nuevamente.',
         };
-      });
+        });
+      }
     } catch (_) {
       if (mounted) setState(() { _error = true; _message = 'No se pudo completar la solicitud. Revisa tu conexión.'; });
     } finally {

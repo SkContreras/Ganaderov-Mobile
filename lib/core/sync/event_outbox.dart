@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import '../../features/livestock/domain/event_draft.dart';
 import '../../features/livestock/domain/inventory.dart';
