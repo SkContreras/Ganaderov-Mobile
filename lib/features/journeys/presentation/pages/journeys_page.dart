@@ -36,7 +36,7 @@ class _JourneysPageState extends State<JourneysPage>{
     setState((){_loading=true;_error=null;_snapshot=null;_items=[];});
     try{
       final snapshot=await widget.inventory.load();
-      final items=snapshot.status=='active'?await repo.journeys(snapshot):<Journey>[];
+      final items=snapshot.status=='active'&&!snapshot.offline?await repo.journeys(snapshot):<Journey>[];
       if(!mounted||request!=_request||!widget.auth.signedIn)return;
       setState((){_snapshot=snapshot;_items=items;});
     }catch(_){if(mounted&&request==_request)setState(()=>_error='No se pudieron consultar las jornadas.');}
@@ -74,7 +74,8 @@ class _JourneysPageState extends State<JourneysPage>{
       if(_loading||_busy)const LinearProgressIndicator(),
       if(_error!=null)Text(_error!,style:TextStyle(color:Theme.of(context).colorScheme.error)),
       if(!_loading&&_snapshot!=null&&_snapshot!.status!='active')const Text('Necesitas pertenecer a un rancho activo.'),
-      if(selected==null&&_snapshot?.status=='active')...[
+      if(_snapshot?.offline==true)const Text('Las jornadas requieren conexión a internet.'),
+      if(selected==null&&_snapshot?.status=='active'&&_snapshot?.offline==false)...[
         FilledButton.icon(onPressed:_busy?null:_create,icon:const Icon(Icons.add),label:const Text('Nueva jornada')),
         if(_items.isEmpty)const Text('No hay jornadas registradas.'),
         for(final j in _items)Card(child:ListTile(title:Text(j.title),subtitle:Text('${j.date} · ${j.attended}/${j.roster.length} atendidos · ${j.open?'En curso':j.status=='completed'?'Completada':'Incompleta'}'),trailing:const Icon(Icons.chevron_right),onTap:(){setState((){_selected=j.id;_query='';_filter='all';});})),

@@ -3,7 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/auth_gateway.dart';
 
 class SupabaseAuthGateway extends AuthGateway {
-  SupabaseAuthGateway(this.client) {
+  SupabaseAuthGateway(this.client,{this.clearCache}) {
     _subscription = client.auth.onAuthStateChange.listen((state) {
       if (state.event == AuthChangeEvent.passwordRecovery) _recovering = true;
       if (state.event == AuthChangeEvent.signedOut) _recovering = false;
@@ -15,6 +15,7 @@ class SupabaseAuthGateway extends AuthGateway {
     });
   }
   final SupabaseClient client;
+  final Future<void> Function()? clearCache;
   static const callback = 'com.ganaderov.mobile://auth/callback';
   late final StreamSubscription<AuthState> _subscription;
   bool _recovering = false;
@@ -56,7 +57,11 @@ class SupabaseAuthGateway extends AuthGateway {
     if (!launched) throw StateError('OAuth launch failed');
   }
   @override
-  Future<void> logout() => client.auth.signOut(scope: SignOutScope.local);
+  Future<void> logout() async {
+    await clearCache?.call();
+    await client.auth.signOut(scope: SignOutScope.local);
+    await clearCache?.call();
+  }
   @override
   void dispose() {
     unawaited(_subscription.cancel());

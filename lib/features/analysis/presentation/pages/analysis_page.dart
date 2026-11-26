@@ -48,6 +48,7 @@ class _AnalysisPageState extends State<AnalysisPage>{
       if(_snapshot!=null&&_snapshot!.status!='active')const Text('Necesitas pertenecer a un rancho activo.'),
       if(_snapshot?.status=='active')...[
         Text(_snapshot!.ranchName),
+        if(_snapshot!.offline)Text('Sin conexión · datos del ${DateFormat('dd/MM HH:mm').format(_snapshot!.cachedAt!)}'),
         const SizedBox(height:12),
         DropdownButtonFormField<String>(key:ValueKey(_id),initialValue:_id??'',isExpanded:true,decoration:const InputDecoration(labelText:'Animal',border:OutlineInputBorder()),items:[const DropdownMenuItem(value:'',child:Text('Captura manual')),for(final a in _animals)DropdownMenuItem(value:a.id,child:Text('${a.value('tag')} · ${a.title}',overflow:TextOverflow.ellipsis))],onChanged:(v)=>setState(()=>_id=v==''?null:v)),
         const SizedBox(height:16),
