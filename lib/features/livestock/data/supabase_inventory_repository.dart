@@ -21,6 +21,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
   final bool eventRpcEnabled;
   final void Function()? onSynced;
   bool _syncing=false;
+  int _loadGeneration=0;
   @override Future<List<PendingEvent>> pendingEvents()async{
     final id=client.auth.currentUser?.id;
     if(id==null||client.auth.currentSession==null)return [];
@@ -88,22 +89,30 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
   Future<InventorySnapshot> load() async {
     final id=client.auth.currentUser?.id;
     if(id==null||client.auth.currentSession==null)throw StateError('Sesión no disponible');
+    final generation=++_loadGeneration;
+    bool valid()=>generation==_loadGeneration&&client.auth.currentUser?.id==id&&client.auth.currentSession!=null;
     InventorySnapshot result;
-    try {result=await _loadRemote().timeout(const Duration(seconds:25));}
+    try {result=await _loadRemote(onMembership:(ownerId)async{
+      if(!valid())throw StateError('Consulta reemplazada o sesión modificada.');
+      if(ownerId==null){await store?.purge(id);}else{await store?.invalidateOtherRanch(id,ownerId);}
+    }).timeout(const Duration(seconds:25));}
     catch(e){
-      if(client.auth.currentUser?.id!=id||client.auth.currentSession==null)rethrow;
+      if(!valid())rethrow;
       final network=e is SocketException||e is TimeoutException||e is AuthRetryableFetchException||e is http.ClientException;
       if(!network){await store?.purge(id);rethrow;}
       final cached=await store?.read(id);
-      if(cached==null||client.auth.currentUser?.id!=id||client.auth.currentSession==null)rethrow;
+      if(cached==null||!valid())rethrow;
       return cached;
     }
-    if(client.auth.currentUser?.id!=id||client.auth.currentSession==null)throw StateError('La sesión cambió');
-    if(result.status=='active'){await store?.save(result);}else{await store?.purge(id);}
-    if(client.auth.currentUser?.id!=id||client.auth.currentSession==null){await store?.purge(id);throw StateError('La sesión cambió');}
+    if(!valid())throw StateError('La consulta o sesión cambió');
+    try{if(result.status=='active'){await store?.save(result);}else{await store?.purge(id);}}catch(_){}
+    if(!valid()){
+      if(client.auth.currentUser?.id!=id||client.auth.currentSession==null)await store?.purge(id);
+      throw StateError('La consulta o sesión cambió');
+    }
     return result;
   }
-  Future<InventorySnapshot> _loadRemote() async {
+  Future<InventorySnapshot> _loadRemote({Future<void> Function(String?)? onMembership}) async {
     final userId = client.auth.currentUser?.id;
     if (userId == null) throw StateError('Sesión no disponible');
     void verifySession() {
@@ -114,12 +123,16 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     if (raw is! Map) throw const FormatException('Contexto de rancho inválido');
     final status = raw['status'];
     if (status == 'pending' || status == 'unassigned') {
+      await onMembership?.call(null);
+      verifySession();
       return InventorySnapshot(status: status as String);
     }
     final ownerId = raw['owner_id'];
     if (status != 'active' || ownerId is! String || ownerId.isEmpty) {
       throw StateError('No se pudo verificar la membresía');
     }
+    await onMembership?.call(ownerId);
+    verifySession();
     final config = await client.from('ranch_animal_configs')
         .select('config,revision').eq('owner_id', ownerId).maybeSingle();
     verifySession();

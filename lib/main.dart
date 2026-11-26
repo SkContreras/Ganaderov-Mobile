@@ -16,11 +16,13 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SupabaseConfig.initialize();
   final store=OfflineStore();
+  final currentUser=Supabase.instance.client.auth.currentUser;
+  try{if(currentUser==null){await store.purgeAll();}else{await store.retainOnly(currentUser.id);}}catch(_){}
   final ranch=SupabaseRanchRepository(Supabase.instance.client);
   final inventory=SupabaseInventoryRepository(Supabase.instance.client,store:store,onSynced:ranch.invalidate,eventRpcEnabled:SupabaseConfig.eventRpcEnabled,journeyRpcEnabled:SupabaseConfig.journeyRpcEnabled);
   final sync=ForegroundSync(inventory.syncEvents);
   sync.start();
   // Scheduling failures must not prevent login or local data access.
   unawaited(configureBackgroundSync().catchError((Object _){}));
-  runApp(ProviderScope(child: GanaderovApp(auth: SupabaseAuthGateway(Supabase.instance.client,clearCache:store.purgeAll), dashboardRepository: SupabaseDashboardRepository(inventory), inventoryRepository: inventory, ranchRepository: ranch)));
+  runApp(ProviderScope(child: GanaderovApp(auth: SupabaseAuthGateway(Supabase.instance.client,clearCache:store.purgeAll,retainCacheFor:store.retainOnly), dashboardRepository: SupabaseDashboardRepository(inventory), inventoryRepository: inventory, ranchRepository: ranch)));
 }
