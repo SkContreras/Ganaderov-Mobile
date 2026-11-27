@@ -17,6 +17,12 @@ abstract interface class OutboxAccess {
   Future<void> syncEvents({bool manual=false});
   Future<void> discardPending(PendingEvent event);
 }
+abstract interface class ConflictAccess {
+  Future<List<Map<String,dynamic>>> reviewOperations();
+  Future<Map<String,dynamic>> currentConflictEntity(Map<String,dynamic> entry);
+  Future<void> archiveOperation(Map<String,dynamic> entry,bool archive);
+  Future<void> resolveOperation(Map<String,dynamic> entry,Map<String,dynamic> reviewed,List<String> selected);
+}
 abstract class EventOutbox extends ChangeNotifier implements OutboxAccess {}
 class ForegroundSync with WidgetsBindingObserver {
   ForegroundSync(this.run);
