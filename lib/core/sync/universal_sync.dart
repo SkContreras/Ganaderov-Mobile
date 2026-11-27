@@ -6,7 +6,7 @@ import '../database/offline_store.dart';
 import 'event_protocol.dart';
 import 'incremental_v1.dart';
 
-const universalActions={'animal.create','animal.update','animal.archive','animal.restore','event.create','event.update','event.delete','photo.create','photo.delete','journey.create','journey.attend','journey.finish','journey.resume','config.update'};
+const universalActions={'animal.create','animal.update','animal.archive','animal.restore','event.create','event.update','event.delete','photo.create','photo.delete','journey.create','journey.attend','journey.finish','journey.resume','config.update','forecast.create','forecast.delete','animal.target.update'};
 class UniversalSync {
   UniversalSync(this.client,this.store,this.project);
   final SupabaseClient client;

@@ -1,0 +1,2 @@
+# D2 Android
+Three actions added to universal outbox. Analysis UI creates and deletes forecasts and sets/clears target ranges. Server computes authoritative results. Current UI marks manual source, requires universal flag and online manager snapshot. Deletion/range read revision against displayed data. No direct writes. Backend Web PR 31 must be installed first in staging. Tests added; CI not verified. No new SQLite schema.

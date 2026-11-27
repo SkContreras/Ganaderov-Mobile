@@ -143,3 +143,19 @@ LotSaleResult evaluateLot(Iterable<InventoryAnimal> animals,String lot,int days,
  }
  return LotSaleResult(included,excluded,current,gross,cost);
 }
+
+class ForecastDraft{
+ const ForecastDraft({required this.baselineWeight,required this.baselineDate,required this.gain,required this.days});
+ final double baselineWeight,gain;
+ final DateTime baselineDate;
+ final int days;
+ double get predicted=>baselineWeight+gain*days;
+ bool get valid=>baselineWeight.isFinite&&baselineWeight>=0&&baselineWeight<=100000&&gain.isFinite&&gain.abs()<=100&&days>=1&&days<=3650&&predicted.isFinite&&predicted>=0&&predicted<=100000&&baselineDate.year>=1900&&!baselineDate.isAfter(DateTime.now());
+ Map<String,dynamic> changes(String animalId)=>{'animalId':animalId,'baselineWeight':baselineWeight,'baselineDate':baselineDate.toIso8601String().substring(0,10),'gainKgPerDay':gain,'days':days};
+}
+abstract interface class ForecastWriter{
+ bool get forecastWritesEnabled;
+ Future<void> createForecast(InventorySnapshot snapshot,String animalId,String id,ForecastDraft draft);
+ Future<void> deleteForecast(InventorySnapshot snapshot,String animalId,String id);
+ Future<void> setWeightTarget(InventorySnapshot snapshot,String animalId,double? minimum,double? maximum);
+}
