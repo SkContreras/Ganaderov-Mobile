@@ -1,4 +1,6 @@
 import 'dart:typed_data';
+import 'dart:convert';
+import '../../../core/sync/universal_sync.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -15,7 +17,25 @@ import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
 class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalLifecycleWriter, AnimalPhotos, AnimalPhotoRemoval, AnimalEventWriter, JourneyRepository, OutboxAccess {
-  SupabaseInventoryRepository(this.client,{this.store,this.onSynced,this.eventRpcEnabled=false,this.journeyRpcEnabled=false});
+  SupabaseInventoryRepository(this.client,{this.store,this.onSynced,this.eventRpcEnabled=false,this.journeyRpcEnabled=false,this.universalEnabled=false,this.incrementalEnabled=false,this.project=''});
+  final bool universalEnabled,incrementalEnabled;
+  final String project;
+  UniversalSync get _universal=>UniversalSync(client,store??(throw StateError('Almacenamiento no disponible')),project);
+  Future<void> queueOperation(InventorySnapshot s,String action,String id,Map<String,dynamic> changes,{int? revision,String? attachment})async{
+    if(!universalEnabled||s.status!='active'||s.userId!=client.auth.currentUser?.id)throw StateError('Operación no disponible');
+    await _universal.enqueue(s.userId,s.ownerId,action,id,changes,revision:revision,attachment:attachment);
+    unawaited(syncEvents().catchError((Object _){}));
+  }
+  Future<int> _revision(InventorySnapshot s,String kind,String id,Object? expected)async{
+    final row=await _universal.entity(s.userId,s.ownerId,kind,id);
+    if(!_sameJson(row['data'],expected))throw StateError('La entidad cambió. Actualiza antes de editar.');
+    return row['revision'] as int;
+  }
+  bool _sameJson(Object? a,Object? b){
+    if(a is Map&&b is Map)return a.length==b.length&&a.keys.every((k)=>b.containsKey(k)&&_sameJson(a[k],b[k]));
+    if(a is List&&b is List)return a.length==b.length&&List.generate(a.length,(i)=>_sameJson(a[i],b[i])).every((v)=>v);
+    return a==b;
+  }
   final bool journeyRpcEnabled;
   @override bool get supportsJourneyResume=>journeyRpcEnabled;
   final bool eventRpcEnabled;
@@ -47,6 +67,10 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final holder=const Uuid().v4();
     try{
       if(!await db.acquireDeliveryLease(holder,DateTime.now().millisecondsSinceEpoch))return;
+      if(universalEnabled){
+        final c=await client.rpc('get_my_ranch_context');
+        if(client.auth.currentUser?.id==id&&c is Map&&c['status']=='active'&&c['owner_id'] is String){await _universal.flush(id,c['owner_id'] as String,holder,manual:manual);changed=true;}
+      }
       for(final p in await db.pending(id)){
         if(client.auth.currentUser?.id!=id||client.auth.currentSession==null)break;
         if(p.state!='pending')continue;
@@ -136,8 +160,10 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     }
     await onMembership?.call(ownerId);
     verifySession();
-    final config = await client.from('ranch_animal_configs')
-        .select('config,revision').eq('owner_id', ownerId).maybeSingle();
+    final mirror=incrementalEnabled?await _universal.pull(userId,ownerId):null;
+    final remoteRows=mirror==null?null:(mirror['records'] as List).cast<Map>();
+    final config = remoteRows==null?await client.from('ranch_animal_configs')
+        .select('config,revision').eq('owner_id', ownerId).maybeSingle():remoteRows.where((r)=>r['kind']=='config').map((r)=>Map<String,dynamic>.from(r['record'] as Map)).firstOrNull;
     verifySession();
     final options = <String, bool>{};
     final labels = <String, String>{};
@@ -158,7 +184,8 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final records = <Map<String, dynamic>>[];
     // Stable keyset pagination avoids the default PostgREST row limit.
     String? lastId;
-    while (true) {
+    if(remoteRows!=null){records.addAll(remoteRows.where((r)=>r['kind']=='animal'&&(r['record'] as Map)['deleted_at']==null).map((r)=>Map<String,dynamic>.from(r['record'] as Map)));}
+    while (remoteRows==null) {
       verifySession();
       var query = client.from('animal_sync_records')
           .select('animal_id,deleted_at,modified_at,payload')
@@ -252,6 +279,16 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
       animal['createdBy']=label;
     }
     payload['animal']=animal;
+    if(universalEnabled){
+      final old=existing==null?null:(existing['payload'] as Map)['animal'];
+      final revision=existing==null?null:await _revision(current,'animal',animalId,old);
+      final oldStatus=old is Map?old['status']?.toString():null;
+      if(oldStatus!=null&&config.active(oldStatus)!=config.active(status)){
+        final active=config.active(status);
+        await queueOperation(current,active?'animal.restore':'animal.archive',animalId,{'status':status,if(!active&&changes.containsKey('exitReason'))'exitReason':changes['exitReason'],if(!active&&changes.containsKey('exitNotes'))'exitNotes':changes['exitNotes']},revision:revision);
+      }else{await queueOperation(current,existing==null?'animal.create':'animal.update',animalId,{'fields':changes},revision:revision);}
+      return;
+    }
     if(existing==null) {
       await client.from('animal_sync_records').insert({'owner_id':current.ownerId,'animal_id':animalId,'payload':payload}).select('animal_id').single();
     } else {
@@ -323,6 +360,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final id=const Uuid().v4();
     final path='${snapshot.ownerId}/$animalId/$id';
     await _photoContext(snapshot,write:true);
+    if(universalEnabled){await queueOperation(snapshot,'photo.create',id,{'animalId':animalId,'mime':mime,'name':name,'primary':photos.isEmpty},attachment:base64Encode(bytes));return;}
     await client.storage.from('animal-photos').uploadBinary(path,bytes,fileOptions:FileOptions(contentType:mime,upsert:false));
     photos.add({'id':id,'animalId':animalId,'name':name,'mime':mime,'primary':photos.isEmpty,'createdAt':DateTime.now().toUtc().toIso8601String(),'cropX':50,'cropY':50,'storagePath':path});
     // Never delete after an ambiguous network failure: the row may have committed.
@@ -343,6 +381,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final photos=_photoList(row);
     final matches=photos.where((p)=>p['id']==photoId&&p['animalId']==animalId&&p['storagePath']=='${snapshot.ownerId}/$animalId/$photoId').toList();
     if(matches.length!=1)throw StateError('Fotografía no encontrada o inválida.');
+    if(universalEnabled){await queueOperation(snapshot,'photo.delete',photoId,{'animalId':animalId},revision:await _revision(snapshot,'photo',photoId,matches.single));return;}
     final wasPrimary=matches.single['primary']==true;
     photos.remove(matches.single);
     if(wasPrimary&&photos.isNotEmpty){
@@ -360,6 +399,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     if(db==null){if(eventRpcEnabled)throw StateError('Almacenamiento local no disponible.');await _sendEvent(snapshot,animalId,draft);return;}
     if(snapshot.status!='active'||!['owner','admin','worker'].contains(snapshot.role)||snapshot.userId.isEmpty||snapshot.ownerId.isEmpty||client.auth.currentSession==null||client.auth.currentUser?.id!=snapshot.userId||!snapshot.animals.any((a)=>a.id==animalId&&a.active))throw StateError('Sesión o animal inválido.');
     if(snapshot.offline&&(snapshot.cachedAt==null||DateTime.now().difference(snapshot.cachedAt!).isNegative||DateTime.now().difference(snapshot.cachedAt!)>const Duration(hours:24)))throw StateError('Actualiza el inventario antes de registrar.');
+    if(universalEnabled){await queueOperation(snapshot,'event.create',draft.id,{'animalId':animalId,'type':draft.type,'date':draft.date,if(draft.type=='weight')'weight':draft.weight,if(draft.product.trim().isNotEmpty)'product':draft.product.trim(),if(draft.notes.trim().isNotEmpty)'notes':draft.notes.trim()});return;}
     await db.enqueue(PendingEvent(userId:snapshot.userId,ownerId:snapshot.ownerId,animalId:animalId,draft:draft),rpc:eventRpcEnabled);
     unawaited(syncEvents().catchError((Object _){ }));
   }
@@ -408,6 +448,11 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
   @override Future<List<Journey>> journeys(InventorySnapshot s)async{
     await _journeyContext(s);
     final result=<Journey>[];
+    if(incrementalEnabled){
+      final mirror=await _universal.pull(s.userId,s.ownerId);
+      for(final raw in (mirror['records'] as List).where((r)=>r['kind']=='journey')){final row=raw['record'] as Map;result.add(Journey(row['journey_id'] as String,row['updated_at'] as String,Map<String,dynamic>.from(row['payload'] as Map)));}
+      await _journeyContext(s);result.sort((a,b)=>b.date.compareTo(a.date));return result;
+    }
     String? last;
     while(true){
       var q=client.from('journey_sync_records').select('journey_id,updated_at,payload').eq('owner_id',s.ownerId);
@@ -430,6 +475,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     if(fresh.ownerId!=s.ownerId||fresh.userId!=s.userId||fresh.status!='active')throw StateError('La membresía cambió.');
     final roster=fresh.animals.where((a)=>a.active&&animalIds.contains(a.id)).map(Journey.rosterEntry).toList();
     if(roster.isEmpty||roster.length!=animalIds.length)throw StateError('Actualiza la selección de animales.');
+    if(universalEnabled){await queueOperation(s,'journey.create',id,{'type':type,'date':date,'animalIds':animalIds.toList(),'product':product,'dose':dose,'notes':notes});return;}
     final prior=await client.from('journey_sync_records').select('journey_id').eq('owner_id',s.ownerId).eq('journey_id',id).maybeSingle();
     if(prior!=null)return;
     final now=DateTime.now().toUtc().toIso8601String();
@@ -448,6 +494,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final a=roster.where((a)=>a['id']==animalId).firstOrNull;
     if(a==null)throw StateError('Animal no incluido.');
     if(current.type=='weight'&&(weight==null||!weight.isFinite||weight<0||weight>100000))throw StateError('Peso inválido.');
+    if(universalEnabled){await queueOperation(s,'journey.attend',j.id,{'animalId':animalId,if(weight!=null)'weight':weight},revision:await _revision(s,'journey',j.id,j.payload));return;}
     final user=client.auth.currentUser;
     if(user==null||user.id!=s.userId||c['display_name'] is! String)throw StateError('Sesión inválida.');
     final actor={'authUserId':user.id,'email':user.email??'','label':c['display_name']};
@@ -463,6 +510,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     if(!journeyRpcEnabled||s.offline||j.status!='incomplete'||j.pending==0)throw StateError('La jornada no se puede reanudar.');
     final c=await _journeyContext(s);
     if(!['owner','admin'].contains(c['role']))throw StateError('Solo administradores pueden reanudar jornadas.');
+    if(universalEnabled){await queueOperation(s,'journey.resume',j.id,{},revision:await _revision(s,'journey',j.id,j.payload));return;}
     await client.rpc('resume_ranch_journey_v1',params:{'p_owner_id':s.ownerId,'p_journey_id':j.id,'p_expected_version':j.version});
     if(client.auth.currentUser?.id==s.userId)onSynced?.call();
   }
@@ -470,6 +518,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
   @override Future<void> finishJourney(InventorySnapshot s,Journey j)async{
     final c=await _journeyContext(s);
     if(!['owner','admin'].contains(c['role'])||s.offline)throw StateError('Solo administradores pueden finalizar jornadas.');
+    if(universalEnabled){await queueOperation(s,'journey.finish',j.id,{'allowIncomplete':j.pending>0},revision:await _revision(s,'journey',j.id,j.payload));return;}
     if(journeyRpcEnabled){
       await client.rpc('finish_ranch_journey_v1',params:{'p_owner_id':s.ownerId,'p_journey_id':j.id,'p_expected_version':j.version,'p_allow_incomplete':j.pending>0});
     }else{

@@ -19,7 +19,7 @@ Future<void> main() async {
   final currentUser=Supabase.instance.client.auth.currentUser;
   try{if(currentUser==null){await store.purgeAll();}else{await store.retainOnly(currentUser.id);}}catch(_){}
   final ranch=SupabaseRanchRepository(Supabase.instance.client);
-  final inventory=SupabaseInventoryRepository(Supabase.instance.client,store:store,onSynced:ranch.invalidate,eventRpcEnabled:SupabaseConfig.eventRpcEnabled,journeyRpcEnabled:SupabaseConfig.journeyRpcEnabled);
+  final inventory=SupabaseInventoryRepository(Supabase.instance.client,store:store,onSynced:ranch.invalidate,eventRpcEnabled:SupabaseConfig.eventRpcEnabled,journeyRpcEnabled:SupabaseConfig.journeyRpcEnabled,universalEnabled:SupabaseConfig.universalSyncEnabled,incrementalEnabled:SupabaseConfig.incrementalSyncEnabled,project:SupabaseConfig.url);
   final sync=ForegroundSync(inventory.syncEvents);
   sync.start();
   // Scheduling failures must not prevent login or local data access.
