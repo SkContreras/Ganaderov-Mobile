@@ -1,8 +1,9 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+
+import '../../../../core/widgets/ranch_illustration.dart';
 import '../../../auth/domain/auth_gateway.dart';
-import '../../../auth/presentation/widgets/ranch_scene.dart';
 import '../../domain/dashboard_summary.dart';
 
 class DashboardPage extends StatefulWidget {
@@ -77,7 +78,11 @@ class _DashboardPageState extends State<DashboardPage> {
           Text(active ? summary!.ranchName : 'Mi rancho', style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
           if (active) Text(switch (summary!.role) {'owner' => 'Propietario', 'admin' => 'Administrador', 'worker' => 'Trabajador', _ => 'Miembro'}),
           const SizedBox(height: 16),
-          const RanchScene(hideEyes: false),
+          const RanchIllustration(
+            'ranch-overview',
+            aspectRatio: 2.4,
+            maxWidth: 500,
+          ),
           const SizedBox(height: 20),
           Row(children: [
             Expanded(child: Text('Resumen', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold))),

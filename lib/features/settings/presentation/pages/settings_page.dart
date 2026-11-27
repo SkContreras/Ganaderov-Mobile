@@ -1,4 +1,6 @@
 import 'package:material_ui/material_ui.dart';
+
+import '../../../../core/widgets/ranch_illustration.dart';
 import '../../../../core/sync/event_outbox.dart';
 import '../widgets/sync_panel.dart';
 import '../../../auth/domain/auth_gateway.dart';
@@ -45,6 +47,8 @@ class _SettingsPageState extends State<SettingsPage> {
     padding: const EdgeInsets.all(20),
     children: [
       Text('Configuración', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
+      const SizedBox(height: 12),
+      const RanchIllustration('ranch-settings'),
       const SizedBox(height: 20),
       ListenableBuilder(listenable: widget.auth, builder: (context, _) => Card(child: ListTile(
         leading: const CircleAvatar(child: Icon(Icons.person_outline)),
