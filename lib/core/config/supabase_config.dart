@@ -2,6 +2,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'secure_session_storage.dart';
 
 abstract final class SupabaseConfig {
+  static const universalSyncEnabled=bool.fromEnvironment('SYNC_UNIVERSAL_V1');
+  static const incrementalSyncEnabled=bool.fromEnvironment('SYNC_INCREMENTAL_V1');
   static const backgroundSyncEnabled = bool.fromEnvironment('SYNC_BACKGROUND_V1');
   static const journeyRpcEnabled = bool.fromEnvironment('SYNC_JOURNEY_RPC_V1');
   static const eventRpcEnabled = bool.fromEnvironment('SYNC_EVENT_RPC_V1');

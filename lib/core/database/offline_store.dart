@@ -48,7 +48,7 @@ class OfflineStore extends GeneratedDatabase {
     return text;
   }
   List<String> _eventScope(String user,String owner,String event,String field)=>['outbox',user,owner,event,field];
-  @override int get schemaVersion=>6;
+  @override int get schemaVersion=>7;
   @override Iterable<TableInfo<Table,Object?>> get allTables=>const [];
   @override List<DatabaseSchemaEntity> get allSchemaEntities=>const [];
   @override MigrationStrategy get migration=>MigrationStrategy(onCreate:(_)async{
@@ -56,8 +56,51 @@ class OfflineStore extends GeneratedDatabase {
     await _createOutbox();
     await _upgradeProtocol();
     await _createDeliveryLease();
+    await _createUniversal();
     await _protectExisting();
-  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<6)await _protectExisting();});
+  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<6)await _protectExisting();if(from<7)await _createUniversal();});
+  Future<void> _createUniversal()async{
+    await customStatement('CREATE TABLE universal_outbox (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,operation_id TEXT NOT NULL,payload TEXT NOT NULL,attachment TEXT,state TEXT NOT NULL DEFAULT \'pending\',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,receipt TEXT,PRIMARY KEY(user_id,owner_id,operation_id))');
+    await customStatement('CREATE TABLE incremental_mirror (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
+  }
+  Future<String> installationId()=>_deviceId();
+  Future<void> enqueueUniversal(String user,String owner,Map<String,dynamic> operation,{String? attachment})async{
+    final id=operation['operationId'] as String;
+    if(operation['ownerId']!=owner)throw StateError('Ámbito inválido');
+    await transaction(()async{
+      final old=await customSelect('SELECT payload,attachment FROM universal_outbox WHERE user_id=? AND owner_id=? AND operation_id=?',variables:[Variable.withString(user),Variable.withString(owner),Variable.withString(id)]).getSingleOrNull();
+      final scope=['universal',user,owner,id];
+      final body=jsonEncode(operation);
+      if(old!=null){
+        final previous=old.readNullable<String>('attachment');
+        if(_open(old.read<String>('payload'),scope)!=body||(previous==null?null:_open(previous,[...scope,'attachment']))!=attachment)throw StateError('UUID reutilizado');
+        return;
+      }
+      await customStatement('INSERT INTO universal_outbox(user_id,owner_id,operation_id,payload,attachment) VALUES(?,?,?,?,?)',[user,owner,id,_seal(body,scope),attachment==null?null:_seal(attachment,[...scope,'attachment'])]);
+    });
+  }
+  Future<List<Map<String,dynamic>>> universalPending(String user,String owner)async{
+    final rows=await customSelect("SELECT * FROM universal_outbox WHERE user_id=? AND owner_id=? AND state='pending' ORDER BY rowid",variables:[Variable.withString(user),Variable.withString(owner)]).get();
+    return rows.map((row){
+      final id=row.read<String>('operation_id'),scope=['universal',user,owner,row.read<String>('operation_id')];
+      final attachment=row.readNullable<String>('attachment');
+      return <String,dynamic>{'id':id,'operation':jsonDecode(_open(row.read<String>('payload'),scope)),'attachment':attachment==null?null:_open(attachment,[...scope,'attachment']),'attempts':row.read<int>('attempts'),'nextAt':row.read<int>('next_at')};
+    }).toList();
+  }
+  Future<void> settleUniversal(String user,String owner,String id,String state,Map<String,dynamic>? receipt,int nextAt)async{
+    if(!['pending','confirmed','conflict','rejected'].contains(state))throw ArgumentError('Estado inválido');
+    await customStatement("UPDATE universal_outbox SET state=?,receipt=?,attempts=attempts+1,next_at=? WHERE user_id=? AND owner_id=? AND operation_id=? AND state='pending'",[state,receipt==null?null:_seal(jsonEncode(receipt),['universal',user,owner,id,'receipt']),nextAt,user,owner,id]);
+  }
+  Future<Map<String,dynamic>?> readMirror(String user,String owner,String project)async{
+    final row=await customSelect('SELECT payload FROM incremental_mirror WHERE user_id=? AND owner_id=? AND project=?',variables:[Variable.withString(user),Variable.withString(owner),Variable.withString(project)]).getSingleOrNull();
+    return row==null?null:Map<String,dynamic>.from(jsonDecode(_open(row.read<String>('payload'),['mirror',user,owner,project])) as Map);
+  }
+  Future<bool> commitMirror(String user,String owner,String project,Map<String,dynamic>? expected,Map<String,dynamic> next) => transaction(()async{
+    final old=await readMirror(user,owner,project);
+    if(old?['epoch']!=expected?['epoch']||old?['cursor']!=expected?['cursor'])return false;
+    await customStatement('INSERT INTO incremental_mirror(user_id,owner_id,project,payload) VALUES(?,?,?,?) ON CONFLICT(user_id,owner_id,project) DO UPDATE SET payload=excluded.payload',[user,owner,project,_seal(jsonEncode(next),['mirror',user,owner,project])]);
+    return true;
+  });
   Future<void> _protectExisting()async{
     if(cipher==null)return;
     await transaction(()async{
@@ -115,10 +158,10 @@ class OfflineStore extends GeneratedDatabase {
     s.animals;
     return s;
   }
-  Future<void> purge(String userId)=>customStatement('DELETE FROM inventory_cache WHERE user_id=?',[userId]);
-  Future<void> purgeAll()=>customStatement('DELETE FROM inventory_cache');
-  Future<void> retainOnly(String userId)=>customStatement('DELETE FROM inventory_cache WHERE user_id<>?',[userId]);
-  Future<void> invalidateOtherRanch(String userId,String ownerId)=>customStatement('DELETE FROM inventory_cache WHERE user_id=? AND owner_id<>?',[userId,ownerId]);
+  Future<void> purge(String userId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id=?',[userId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id=?',[userId]);});
+  Future<void> purgeAll()=>transaction(()async{await customStatement('DELETE FROM inventory_cache');await customStatement('DELETE FROM incremental_mirror');});
+  Future<void> retainOnly(String userId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id<>?',[userId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id<>?',[userId]);});
+  Future<void> invalidateOtherRanch(String userId,String ownerId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id=? AND owner_id<>?',[userId,ownerId]);});
 
   Future<void> enqueue(PendingEvent p,{bool rpc=false})async{
     p.draft.validate();
