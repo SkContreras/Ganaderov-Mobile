@@ -1,0 +1,2 @@
+# D3 Android
+SQLite v10 encrypted scoped journey cache, 24-hour expiry, exact server revision per downloaded journey. Offline create/attend/add supported with cached membership. Pending attendance is marked separately, not counted as confirmed. Custom manager-only activities. Finish/resume online; no dependent capture against unconfirmed new journey, same-animal pending changes blocked. Server Web D3 migration required. Existing queue is foreground delivery, not guaranteed background. Tests/device validation pending.

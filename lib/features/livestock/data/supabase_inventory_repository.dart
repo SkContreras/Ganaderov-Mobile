@@ -18,7 +18,7 @@ import '../domain/event_draft.dart';
 import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
-class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalLifecycleWriter, AnimalPhotos, AnimalPhotoRemoval, AnimalEventWriter, JourneyRepository, OutboxAccess, ConflictAccess, AnalysisPreferences, ForecastWriter {
+class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalLifecycleWriter, AnimalPhotos, AnimalPhotoRemoval, AnimalEventWriter, JourneyRepository, ExtendedJourneyRepository, OutboxAccess, ConflictAccess, AnalysisPreferences, ForecastWriter {
   SupabaseInventoryRepository(this.client,{this.store,this.onSynced,this.eventRpcEnabled=false,this.journeyRpcEnabled=false,this.universalEnabled=false,this.incrementalEnabled=false,this.project=''});
   final bool universalEnabled,incrementalEnabled;
   final String project;
@@ -114,7 +114,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     await queueOperation(s,'animal.target.update',animalId,{'minimum':minimum,'maximum':maximum},revision:await _revision(s,'animal',animalId,payload['animal']));
   }
   final bool journeyRpcEnabled;
-  @override bool get supportsJourneyResume=>journeyRpcEnabled;
+  @override bool get supportsJourneyResume=>journeyRpcEnabled||universalEnabled;
   final bool eventRpcEnabled;
   final void Function()? onSynced;
   bool _syncing=false;
@@ -522,13 +522,69 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     if(client.auth.currentUser?.id!=s.userId||c is! Map||c['status']!='active'||c['owner_id']!=s.ownerId||!['owner','admin','worker'].contains(c['role']))throw StateError('La membresía cambió.');
     return c;
   }
+  @override bool get supportsOfflineJourneys=>universalEnabled&&store!=null;
+  void _journeyCaptureScope(InventorySnapshot s){
+    if(!supportsOfflineJourneys||s.status!='active'||s.userId!=client.auth.currentUser?.id||client.auth.currentSession==null||!['owner','admin','worker'].contains(s.role))throw StateError('Sesión o membresía no disponible');
+    if(s.offline&&(s.cachedAt==null||DateTime.now().difference(s.cachedAt!).isNegative||DateTime.now().difference(s.cachedAt!)>const Duration(hours:24)))throw StateError('Actualiza la membresía con conexión');
+  }
+  Future<int> _journeyRevision(InventorySnapshot s,Journey j)async{
+    _journeyCaptureScope(s);
+    if(!s.offline)return _revision(s,'journey',j.id,j.payload);
+    final cached=await store!.readJourneyCache(s.userId,s.ownerId,project);
+    final row=cached.where((r)=>r['id']==j.id).firstOrNull;
+    if(row==null||row['revision'] is! int||!_sameJson(row['payload'],j.payload))throw StateError('Descarga la revisión de la jornada antes de capturar');
+    return row['revision'] as int;
+  }
+  Future<void> _queueJourneyChange(InventorySnapshot s,Journey j,String action,Map<String,dynamic> changes)async{
+    final revision=await _journeyRevision(s,j);
+    final pending=await store!.universalPending(s.userId,s.ownerId);
+    if(pending.any((r){
+      final op=r['operation'] as Map;
+      return op['entityId']==j.id&&(op['action'] as String).startsWith('journey.')&&(action!='journey.attend'||op['action']!='journey.attend'||(op['changes'] as Map)['animalId']==changes['animalId']);
+    }))throw StateError('Hay una operación pendiente para esta jornada o animal');
+    await queueOperation(s,action,j.id,changes,revision:revision);
+  }
+  @override Future<Set<String>> pendingJourneyAnimals(InventorySnapshot s,String journeyId)async{
+    if(!supportsOfflineJourneys)return {};
+    _journeyCaptureScope(s);
+    return (await store!.universalPending(s.userId,s.ownerId)).map((r)=>r['operation'] as Map).where((op)=>op['action']=='journey.attend'&&op['entityId']==journeyId).map((op)=>(op['changes'] as Map)['animalId'] as String).toSet();
+  }
+  Future<void> _cacheJourneys(InventorySnapshot s,List<Journey> result)async{
+    if(!supportsOfflineJourneys)return;
+    final rows=<Map<String,dynamic>>[];
+    for(final j in result){
+      int? revision;
+      try{revision=await _revision(s,'journey',j.id,j.payload);}catch(_){_universal.verify(s.userId);}
+      rows.add({'id':j.id,'version':j.version,'payload':j.payload,'revision':revision});
+    }
+    await _journeyContext(s);
+    await store!.saveJourneyCache(s.userId,s.ownerId,project,rows);
+  }
+  @override Future<void> createCustomJourney(InventorySnapshot s,String id,String name,String date,String product,String dose,String notes,Set<String> animalIds)async{
+    _journeyCaptureScope(s);
+    if(!['owner','admin'].contains(s.role)||name.trim().isEmpty||name.length>120)throw StateError('Actividad personalizada no autorizada');
+    if(!s.offline)await _journeyContext(s);
+    if(animalIds.isEmpty||!animalIds.every((id)=>s.animals.any((a)=>a.id==id&&a.active)))throw StateError('Selección inválida');
+    await queueOperation(s,'journey.create',id,{'type':'other','name':name.trim(),'date':date,'product':product,'dose':dose,'notes':notes,'animalIds':animalIds.toList()});
+  }
+  @override Future<void> addJourneyAnimals(InventorySnapshot s,Journey j,Set<String> animalIds)async{
+    _journeyCaptureScope(s);
+    if(!j.open||(j.type=='other'&&s.role=='worker')||animalIds.isEmpty||!animalIds.every((id)=>s.animals.any((a)=>a.id==id&&a.active)&&!j.roster.any((a)=>a['id']==id)))throw StateError('Selección no disponible');
+    await _queueJourneyChange(s,j,'journey.add_animals',{'animalIds':animalIds.toList()});
+  }
   @override Future<List<Journey>> journeys(InventorySnapshot s)async{
+    if(s.offline){
+      _journeyCaptureScope(s);
+      final cached=await store!.readJourneyCache(s.userId,s.ownerId,project);
+      _universal.verify(s.userId);
+      return cached.map((r)=>Journey(r['id'] as String,r['version'] as String,Map<String,dynamic>.from(r['payload'] as Map),revision:r['revision'] as int?)).toList();
+    }
     await _journeyContext(s);
     final result=<Journey>[];
     if(incrementalEnabled){
       final mirror=await _universal.pull(s.userId,s.ownerId);
       for(final raw in (mirror['records'] as List).where((r)=>r['kind']=='journey')){final row=raw['record'] as Map;result.add(Journey(row['journey_id'] as String,row['updated_at'] as String,Map<String,dynamic>.from(row['payload'] as Map)));}
-      await _journeyContext(s);result.sort((a,b)=>b.date.compareTo(a.date));return result;
+      await _journeyContext(s);result.sort((a,b)=>b.date.compareTo(a.date));await _cacheJourneys(s,result);return result;
     }
     String? last;
     while(true){
@@ -543,10 +599,12 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     }
     await _journeyContext(s);
     result.sort((a,b)=>b.date.compareTo(a.date));
+    await _cacheJourneys(s,result);
     return result;
   }
   @override Future<void> createJourney(InventorySnapshot s,String id,String type,String date,String product,String dose,String notes,Set<String> animalIds)async{
     EventDraft(id:id,type:type,date:date,weight:type=='weight'?0:null).validate();
+    if(s.offline){_journeyCaptureScope(s);if(animalIds.isEmpty||!animalIds.every((id)=>s.animals.any((a)=>a.id==id&&a.active)))throw StateError('Selección inválida');await queueOperation(s,'journey.create',id,{'type':type,'date':date,'animalIds':animalIds.toList(),'product':product,'dose':dose,'notes':notes});return;}
     await _journeyContext(s);
     final fresh=await _loadRemote();
     if(fresh.ownerId!=s.ownerId||fresh.userId!=s.userId||fresh.status!='active')throw StateError('La membresía cambió.');
@@ -560,6 +618,13 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     await client.from('journey_sync_records').insert({'owner_id':s.ownerId,'journey_id':id,'payload':{'id':id,'type':type,'name':'','date':date,'product':product,'dose':dose,'notes':notes,'roster':roster,'status':'in_progress','createdAt':now,'updatedAt':now,'completedAt':null}}).select('journey_id').single();
   }
   @override Future<void> attendJourney(InventorySnapshot s,Journey j,String animalId,double? weight)async{
+    if(universalEnabled){
+      _journeyCaptureScope(s);
+      if(!j.open||(j.type=='other'&&s.role=='worker')||!j.roster.any((a)=>a['id']==animalId)||!s.animals.any((a)=>a.id==animalId&&a.active))throw StateError('Animal o jornada no disponible');
+      if(j.type=='weight'?(weight==null||!weight.isFinite||weight<0||weight>100000):weight!=null)throw StateError('Peso inválido');
+      await _queueJourneyChange(s,j,'journey.attend',{'animalId':animalId,if(weight!=null)'weight':weight});
+      return;
+    }
     final fresh=await _loadRemote();
     if(fresh.ownerId!=s.ownerId||fresh.userId!=s.userId||!fresh.animals.any((a)=>a.id==animalId&&a.active))throw StateError('El animal ya no está activo.');
     final c=await _journeyContext(s);
@@ -571,7 +636,6 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final a=roster.where((a)=>a['id']==animalId).firstOrNull;
     if(a==null)throw StateError('Animal no incluido.');
     if(current.type=='weight'&&(weight==null||!weight.isFinite||weight<0||weight>100000))throw StateError('Peso inválido.');
-    if(universalEnabled){await queueOperation(s,'journey.attend',j.id,{'animalId':animalId,if(weight!=null)'weight':weight},revision:await _revision(s,'journey',j.id,j.payload));return;}
     final user=client.auth.currentUser;
     if(user==null||user.id!=s.userId||c['display_name'] is! String)throw StateError('Sesión inválida.');
     final actor={'authUserId':user.id,'email':user.email??'','label':c['display_name']};
@@ -584,10 +648,10 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
   }
 
   @override Future<void> resumeJourney(InventorySnapshot s,Journey j)async{
-    if(!journeyRpcEnabled||s.offline||j.status!='incomplete'||j.pending==0)throw StateError('La jornada no se puede reanudar.');
+    if(!supportsJourneyResume||s.offline||j.status!='incomplete'||j.pending==0)throw StateError('La jornada no se puede reanudar.');
     final c=await _journeyContext(s);
     if(!['owner','admin'].contains(c['role']))throw StateError('Solo administradores pueden reanudar jornadas.');
-    if(universalEnabled){await queueOperation(s,'journey.resume',j.id,{},revision:await _revision(s,'journey',j.id,j.payload));return;}
+    if(universalEnabled){await _queueJourneyChange(s,j,'journey.resume',{});return;}
     await client.rpc('resume_ranch_journey_v1',params:{'p_owner_id':s.ownerId,'p_journey_id':j.id,'p_expected_version':j.version});
     if(client.auth.currentUser?.id==s.userId)onSynced?.call();
   }
@@ -595,7 +659,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
   @override Future<void> finishJourney(InventorySnapshot s,Journey j)async{
     final c=await _journeyContext(s);
     if(!['owner','admin'].contains(c['role'])||s.offline)throw StateError('Solo administradores pueden finalizar jornadas.');
-    if(universalEnabled){await queueOperation(s,'journey.finish',j.id,{'allowIncomplete':j.pending>0},revision:await _revision(s,'journey',j.id,j.payload));return;}
+    if(universalEnabled){await _queueJourneyChange(s,j,'journey.finish',{'allowIncomplete':j.pending>0});return;}
     if(journeyRpcEnabled){
       await client.rpc('finish_ranch_journey_v1',params:{'p_owner_id':s.ownerId,'p_journey_id':j.id,'p_expected_version':j.version,'p_allow_incomplete':j.pending>0});
     }else{

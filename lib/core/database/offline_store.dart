@@ -48,7 +48,7 @@ class OfflineStore extends GeneratedDatabase {
     return text;
   }
   List<String> _eventScope(String user,String owner,String event,String field)=>['outbox',user,owner,event,field];
-  @override int get schemaVersion=>9;
+  @override int get schemaVersion=>10;
   @override Iterable<TableInfo<Table,Object?>> get allTables=>const [];
   @override List<DatabaseSchemaEntity> get allSchemaEntities=>const [];
   @override MigrationStrategy get migration=>MigrationStrategy(onCreate:(_)async{
@@ -59,11 +59,21 @@ class OfflineStore extends GeneratedDatabase {
     await _createUniversal();
     await _upgradeConflictReview();
     await _createAnalysisPreferences();
+    await _createJourneyCache();
     await _protectExisting();
-  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<6)await _protectExisting();if(from<7)await _createUniversal();if(from<8)await _upgradeConflictReview();if(from<9)await _createAnalysisPreferences();});
+  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<6)await _protectExisting();if(from<7)await _createUniversal();if(from<8)await _upgradeConflictReview();if(from<9)await _createAnalysisPreferences();if(from<10)await _createJourneyCache();});
   Future<void> _createUniversal()async{
     await customStatement('CREATE TABLE universal_outbox (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,operation_id TEXT NOT NULL,payload TEXT NOT NULL,attachment TEXT,state TEXT NOT NULL DEFAULT \'pending\',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,receipt TEXT,PRIMARY KEY(user_id,owner_id,operation_id))');
     await customStatement('CREATE TABLE incremental_mirror (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
+  }
+  Future<void> _createJourneyCache()=>customStatement('CREATE TABLE journey_cache (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,saved_at INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
+  Future<void> saveJourneyCache(String user,String owner,String project,List<Map<String,dynamic>> rows)=>customStatement('INSERT INTO journey_cache(user_id,owner_id,project,saved_at,payload) VALUES(?,?,?,?,?) ON CONFLICT(user_id,owner_id,project) DO UPDATE SET saved_at=excluded.saved_at,payload=excluded.payload',[user,owner,project,DateTime.now().millisecondsSinceEpoch,_seal(jsonEncode(rows),['journeys',user,owner,project])]);
+  Future<List<Map<String,dynamic>>> readJourneyCache(String user,String owner,String project)async{
+    final row=await customSelect('SELECT saved_at,payload FROM journey_cache WHERE user_id=? AND owner_id=? AND project=?',variables:[Variable.withString(user),Variable.withString(owner),Variable.withString(project)]).getSingleOrNull();
+    if(row==null)return [];
+    final age=DateTime.now().millisecondsSinceEpoch-row.read<int>('saved_at');
+    if(age<0||age>86400000)return [];
+    return (jsonDecode(_open(row.read<String>('payload'),['journeys',user,owner,project])) as List).map((e)=>Map<String,dynamic>.from(e as Map)).toList();
   }
   Future<void> _createAnalysisPreferences()=>customStatement('CREATE TABLE analysis_preferences (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
   Future<List<Map<String,dynamic>>> readQuotes(String user,String owner,String project)async{
@@ -202,10 +212,10 @@ class OfflineStore extends GeneratedDatabase {
     s.animals;
     return s;
   }
-  Future<void> purge(String userId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id=?',[userId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id=?',[userId]);});
-  Future<void> purgeAll()=>transaction(()async{await customStatement('DELETE FROM inventory_cache');await customStatement('DELETE FROM incremental_mirror');});
-  Future<void> retainOnly(String userId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id<>?',[userId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id<>?',[userId]);});
-  Future<void> invalidateOtherRanch(String userId,String ownerId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id=? AND owner_id<>?',[userId,ownerId]);});
+  Future<void> purge(String userId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id=?',[userId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id=?',[userId]);await customStatement('DELETE FROM journey_cache WHERE user_id=?',[userId]);});
+  Future<void> purgeAll()=>transaction(()async{await customStatement('DELETE FROM inventory_cache');await customStatement('DELETE FROM incremental_mirror');await customStatement('DELETE FROM journey_cache');});
+  Future<void> retainOnly(String userId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id<>?',[userId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id<>?',[userId]);await customStatement('DELETE FROM journey_cache WHERE user_id<>?',[userId]);});
+  Future<void> invalidateOtherRanch(String userId,String ownerId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await customStatement('DELETE FROM journey_cache WHERE user_id=? AND owner_id<>?',[userId,ownerId]);});
 
   Future<void> enqueue(PendingEvent p,{bool rpc=false})async{
     p.draft.validate();
