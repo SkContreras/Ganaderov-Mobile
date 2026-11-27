@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/services.dart';
 import '../domain/auth_gateway.dart';
 import '../../../core/sync/background_session.dart';
 
@@ -31,7 +32,9 @@ class SupabaseAuthGateway extends AuthGateway {
   String? _lastUserId;
   final _background=BackgroundSessionPublisher();
   bool _loggingOut=false;
-  static const callback = 'com.ganaderov.mobile://auth/callback';
+  static const callback = appFlavor=='d4test'
+      ? 'com.ganaderov.mobile.d4test://auth/callback'
+      : 'com.ganaderov.mobile://auth/callback';
   late final StreamSubscription<AuthState> _subscription;
   bool _recovering = false;
   String? _notice;

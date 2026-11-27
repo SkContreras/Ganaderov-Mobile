@@ -87,6 +87,16 @@ storeFile=../upload-keystore.jks
 Guarda el keystore y sus contraseñas de forma segura. Sin `key.properties`, el
 build `release` queda sin firmar y no está listo para publicar.
 
+## APK de pruebas D4
+
+La variante `d4test` se instala como **Ganaderov Pruebas**, separada de la
+aplicación normal. El workflow `Android test APK` construye un APK debug después
+de validar un backend local desechable y comprueba paquete, callback y firma.
+La configuración productiva está expresamente excluida. Consulta
+[la guía de instalación y reproducción](docs/android-test-apk.md), incluida la
+conexión por `adb reverse` y la comprobación de que un backend recreado corresponde
+al APK. La variante predeterminada sigue siendo `production`.
+
 ## Validación
 
 ```sh

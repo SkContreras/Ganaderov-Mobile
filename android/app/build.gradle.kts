@@ -53,11 +53,32 @@ android {
         versionName = flutter.versionName
     }
 
+    flavorDimensions += "environment"
+    productFlavors {
+        create("production") {
+            dimension = "environment"
+        }
+        create("d4test") {
+            dimension = "environment"
+            applicationIdSuffix = ".d4test"
+            versionNameSuffix = "-d4test"
+        }
+    }
+
     buildTypes {
         release {
             if (keystorePropertiesFile.exists()) {
                 signingConfig = signingConfigs.getByName("release")
             }
+        }
+    }
+}
+
+// The disposable-backend APK is deliberately a debug-only variant.
+androidComponents {
+    beforeVariants(selector().withFlavor("environment" to "d4test")) { variant ->
+        if (variant.buildType != "debug") {
+            variant.enable = false
         }
     }
 }

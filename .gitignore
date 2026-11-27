@@ -32,6 +32,9 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+/.test-apk/
+/test-apk.local.json
+/backend-source/
 .env
 .env.*
 !.env.example
