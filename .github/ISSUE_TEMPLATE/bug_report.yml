@@ -1,0 +1,26 @@
+name: Reportar un error
+description: Describe un fallo reproducible de Ganaderov Mobile
+title: "[Error]: "
+body:
+  - type: textarea
+    attributes:
+      label: Qué ocurrió
+      description: No incluyas credenciales ni datos privados.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Pasos para reproducir
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Resultado esperado
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Versión de la app y Android
+  - type: textarea
+    attributes:
+      label: Evidencia sanitizada

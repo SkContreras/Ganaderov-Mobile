@@ -1,0 +1,17 @@
+name: Solicitar una mejora
+description: Propón una mejora para el trabajo ganadero
+title: "[Mejora]: "
+body:
+  - type: textarea
+    attributes:
+      label: Necesidad o problema
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Solución propuesta
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Consideraciones de uso sin conexión y permisos

@@ -1,161 +1,143 @@
-# Ganaderov
+<p align="center"><img src="assets/icons/app-icon.svg" width="100" alt="Ganaderov"></p>
 
-Aplicación móvil para la gestión ganadera, construida con Flutter.
+<h1 align="center">Ganaderov Mobile</h1>
 
-## Arquitectura
+<p align="center"><strong>El rancho en tu bolsillo.</strong><br>Gestión ganadera para Android, diseñada para trabajar también en el campo con conectividad limitada.</p>
 
-El punto de entrada solo inicia la aplicación. La configuración global, las
-capacidades compartidas y cada funcionalidad viven separadas para evitar que
-`main.dart` se convierta en el lugar donde reside toda la aplicación.
+<p align="center">
+<a href="https://github.com/SkContreras/Ganaderov-Mobile/actions/workflows/flutter-checks.yml"><img src="https://github.com/SkContreras/Ganaderov-Mobile/actions/workflows/flutter-checks.yml/badge.svg" alt="Flutter checks"></a>
+<a href="https://github.com/SkContreras/Ganaderov-Mobile/releases"><img src="https://img.shields.io/github/v/release/SkContreras/Ganaderov-Mobile" alt="Versión publicada"></a>
+<a href="https://flutter.dev"><img src="https://img.shields.io/badge/Flutter-Android-02569B" alt="Flutter Android"></a>
+<a href="https://supabase.com"><img src="https://img.shields.io/badge/Supabase-Backend-3ECF8E" alt="Supabase"></a>
+</p>
+
+<p align="center"><a href="https://github.com/SkContreras/Ganaderov-Mobile/releases/latest"><strong>Descargar APK publicada</strong></a> · <a href="https://github.com/SkContreras/Ganaderov">Ganaderov Web</a> · <a href="https://github.com/SkContreras/Ganaderov-Mobile/issues">Reportar un problema</a></p>
+
+## Acerca del proyecto
+
+Ganaderov reúne la información del ganado, sus actividades y el trabajo cotidiano del rancho en una aplicación móvil. Su objetivo es facilitar la captura en campo, mantener trazabilidad y reconciliar los cambios con el backend compartido con Ganaderov Web.
+
+## Funcionalidades
+
+| Módulo | Capacidades |
+| --- | --- |
+| Inicio | Resumen del rancho e indicadores del inventario |
+| Ganado | Búsqueda por arete, nombre, raza e identificación oficial; fichas, historial y archivo |
+| Fotografías | Galería privada, encuadre, foto principal y acceso rápido para compartir originales mediante Android |
+| Jornadas | Registro de actividades, asistencia, cierre y reanudación según permisos |
+| Análisis | Indicadores productivos, pesajes y pronósticos |
+| Ajustes | Configuración del ganado, miembros y revisión de sincronización |
+| Autenticación | Correo, recuperación de contraseña, Google y Facebook (requiere proveedores configurados) |
+| Trabajo sin conexión | Persistencia cifrada, cola durable, dependencias y resolución de conflictos según flags y backend |
+
+## Identidad visual
+
+Las siguientes imágenes son **ilustraciones originales de la interfaz**, no capturas de un teléfono.
+
+| Inicio de sesión | Inventario | Jornadas |
+| --- | --- | --- |
+| ![Escena de inicio](assets/images/ranch-login-day.webp) | ![Inventario](assets/images/ranch-inventory-empty.webp) | ![Jornadas](assets/images/ranch-journeys.webp) |
+| **Resumen** | **Análisis** | **Ajustes** |
+| ![Resumen](assets/images/ranch-overview.webp) | ![Análisis](assets/images/ranch-analysis.webp) | ![Ajustes](assets/images/ranch-settings.webp) |
+
+## Instalación y estado de publicación
+
+1. Abre [GitHub Releases](https://github.com/SkContreras/Ganaderov-Mobile/releases/latest).
+2. Descarga el APK de producción y su archivo SHA-256.
+3. Verifica la descarga con `sha256sum -c app-production-release.apk.sha256` desde la carpeta de descarga.
+4. Instala únicamente el archivo obtenido del repositorio oficial. Android puede pedir autorización para instalar desde esa fuente.
+
+El APK publicado y el código de `main` pueden corresponder a revisiones distintas. Consulta las notas de cada release; las funciones nuevas de la rama principal, incluida la opción de compartir fotos, no están garantizadas en una APK anterior. La disponibilidad de la sincronización avanzada depende de los parámetros de compilación y de las migraciones del backend. Consulta [preparación para producción](docs/release-readiness.md).
+
+## Compartir una fotografía
+
+En **Ganado**, busca el animal y pulsa el icono de compartir en su tarjeta o abre su galería. Elige la fotografía y selecciona una aplicación instalada en Android. Se comparte el original, no un enlace público; puede contener metadatos de cámara. Sin conexión, la fotografía debe estar disponible localmente. [Detalles y validación](docs/photo-sharing.md).
+
+## Arquitectura y tecnología
+
+Flutter · Dart · Riverpod · GoRouter · Supabase · Drift/SQLite · PointyCastle · WorkManager.
+
+```mermaid
+flowchart TD
+  UI[Flutter: pantallas y navegación] --> R[Repositorios y reglas de negocio]
+  R --> L[SQLite y caché cifrada]
+  R --> S[Motor de sincronización]
+  S --> B[Supabase: Auth, RPC, PostgreSQL y Storage]
+  L --> S
+  W[WorkManager] --> S
+```
 
 ```text
-android/
-assets/
-  fonts/
-  icons/
-  images/
 lib/
-  main.dart
-  app.dart
+  main.dart              # Inicialización y recuperación de arranque
+  app.dart               # Aplicación
   core/
-    config/
-    database/
-    network/
-    router/
-    sync/
-    theme/
-    utils/
+    config/              # Configuración y sesión
+    database/            # Persistencia y cifrado
+    router/              # Navegación
+    sync/                # Colas, conflictos y entrega
+    theme/               # Identidad visual
   features/
-    auth/
-    dashboard/
-    finances/
-    health/
-    livestock/
-    profile/
-    reproduction/
-    settings/
-  shared/
-    models/
-    services/
-    widgets/
-test/
+    auth/ dashboard/ livestock/ journeys/ analysis/ settings/
+  shared/                # Componentes reutilizables
+android/                 # Integración nativa y variantes
+assets/                  # Iconos e ilustraciones
+backend/                 # SQL complementario
+contracts/sync/v1/       # Contrato de sincronización
+docs/                    # Guías técnicas
+test/                    # Pruebas automatizadas
+tool/                    # Herramientas de desarrollo
 ```
 
-`core` contiene infraestructura transversal; `shared` contiene piezas
-reutilizables sin pertenencia a una funcionalidad concreta. Cada módulo de
-`features` puede organizarse por capas según lo necesite:
+Las funcionalidades se organizan en capas `data`, `domain` y `presentation` cuando corresponde.
 
-```text
-feature_name/
-  data/          # Fuentes de datos, DTO y repositorios concretos
-  domain/        # Entidades, contratos y casos de uso
-  presentation/  # Pantallas, widgets y estado de UI
-```
+## Desarrollo local
 
-No es necesario crear todas las capas por adelantado: se añaden cuando la
-funcionalidad las requiere. El enrutado central está en
-`core/router/app_router.dart`, el tema en `core/theme/app_theme.dart` y la
-pantalla inicial está implementada en `features/dashboard/presentation/`.
-
-## Desarrollo
+Requisitos: Git, Flutter compatible con `pubspec.yaml`, Android SDK, Java 17 y un backend Supabase autorizado. En Linux, instala SQLite del sistema para las pruebas.
 
 ```sh
+git clone https://github.com/SkContreras/Ganaderov-Mobile.git
+cd Ganaderov-Mobile
+cp .env.example .env
 flutter pub get
 ./tool/flutter_with_env.sh run
-# O para compilar el APK de producción:
+```
+
+Completa `.env` con la URL y clave **publicable** de tu proyecto de pruebas. No uses una clave `service_role` ni `secret`. Las políticas RLS y permisos de RPC deben proteger los datos en el servidor.
+
+```sh
+flutter analyze --no-fatal-infos
+flutter test
+```
+
+### Compilación y firma
+
+```sh
 ./tool/flutter_with_env.sh build apk --release --flavor production
 ```
 
-El script carga `SUPABASE_URL` y `SUPABASE_PUBLISHABLE_KEY` desde `.env` y las
-pasa a Flutter con `--dart-define`. `.env` está excluido de Git; mantenlo local y
-no lo compartas. Usa únicamente la clave publicable, nunca una clave `secret` o
-`service_role`. La clave publicable está pensada para clientes, pero los permisos
-deben protegerse con políticas RLS en Supabase.
+El archivo se genera en `build/app/outputs/flutter-apk/app-production-release.apk`. Configura `android/key.properties` con un keystore autorizado antes de distribuirlo; sin él, la compilación release queda sin firmar. Conserva la misma clave para actualizar instalaciones existentes. No compartas contraseñas ni keystores.
 
-## Firma de Android para producción
+Las opciones `SYNC_UNIVERSAL_V1`, `SYNC_INCREMENTAL_V1`, `SYNC_BACKGROUND_V1`, `SYNC_JOURNEY_RPC_V1` y `SYNC_EVENT_RPC_V1` se fijan al compilar y están desactivadas por defecto. Activa únicamente las compatibles con un backend previamente validado. La variante `d4test` usa un backend desechable y no debe conectarse a producción.
 
-Los builds `release` no usan la firma de depuración. Para firmarlos, crea un
-keystore y configura `android/key.properties` (este archivo está excluido de
-Git) con estos campos:
+## Documentación técnica
 
-```properties
-storePassword=...
-keyPassword=...
-keyAlias=...
-storeFile=../upload-keystore.jks
-```
+- [Desarrollo y configuración de distribución](docs/development.md)
+- [Captura universal sin conexión](docs/universal-completion.md)
+- [Sincronización incremental](docs/incremental-sync-v1.md)
+- [Entrega en segundo plano](docs/background-delivery-v1.md)
+- [Cifrado local](docs/local-encryption-v2.md)
+- [Fotografías y encuadre](docs/photo-d4.md)
+- [Compartir fotografías](docs/photo-sharing.md)
+- [APK de pruebas](docs/android-test-apk.md)
+- [Preparación para producción](docs/release-readiness.md)
 
-Guarda el keystore y sus contraseñas de forma segura. Sin `key.properties`, el
-build `release` queda sin firmar y no está listo para publicar.
+## Colaboración y seguridad
 
-## APK de pruebas D4
+Consulta [CONTRIBUTING.md](CONTRIBUTING.md) para contribuir, [CHANGELOG.md](CHANGELOG.md) para los cambios y [SECURITY.md](SECURITY.md) para reportar vulnerabilidades sin publicar información sensible.
 
-La variante `d4test` se instala como **Ganaderov Pruebas**, separada de la
-aplicación normal. El workflow `Android test APK` construye un APK debug después
-de validar un backend local desechable y comprueba paquete, callback y firma.
-La configuración productiva está expresamente excluida. Consulta
-[la guía de instalación y reproducción](docs/android-test-apk.md), incluida la
-conexión por `adb reverse` y la comprobación de que un backend recreado corresponde
-al APK. La variante predeterminada sigue siendo `production`.
+## Agradecimientos
 
-## Validación
+A los ganaderos que inspiran el desarrollo de herramientas útiles para el trabajo de campo y a las comunidades de Flutter, Dart, Supabase, SQLite y las bibliotecas de código abierto utilizadas en el proyecto.
 
-```sh
-flutter test
-flutter analyze
-```
-
-## Captura universal sin conexión
-
-El inventario, los eventos históricos, las jornadas y la configuración utilizan
-capturas locales cifradas y dependencias durables. Los borradores dependientes
-esperan los recibos confirmados para sellar su revisión antes del primer envío.
-Consulta [la guía de uso y validación](docs/universal-completion.md), incluidos
-permisos, preparación de revisiones, plazo de 24 horas y resolución de conflictos.
-La versión actual de la base local es 12.
-
-## D4: encuadre y galería sin conexión
-
-Con `--dart-define=SYNC_UNIVERSAL_V1=true`, abre las fotografías con conexión
-una vez para guardar sus originales y la revisión confirmada de sus metadatos.
-Después, propietarios y administradores pueden ajustar el encuadre, elegir la
-principal o quitar una fotografía sin conexión mientras la sesión y la copia
-local del inventario sigan vigentes. Se conserva el plazo de 24 horas del modo
-sin conexión; una revisión desconocida o vencida requiere volver a abrir la
-fotografía con conexión. Las imágenes antiguas sin `animalId` interno se aceptan
-únicamente cuando su ruta y el padre confirmado corresponden al animal.
-
-El editor permite arrastrar la imagen y usar dos dedos para acercar o alejar.
-Los botones **+ / −** y **Restablecer encuadre** ofrecen ajustes accesibles.
-Los gestos muestran una previsualización y **Guardar** registra una sola operación;
-**Cancelar** o cerrar el editor descarta los ajustes. La previsualización y el
-estado pendiente se reconstruyen desde la cola cifrada después de cerrar y abrir
-la aplicación. El inventario confirmado
-se guarda por separado y nunca recibe una revisión inventada a partir de esa
-previsualización. Se permite **una operación de fotografía sin resolver por
-animal**: los controles quedan deshabilitados hasta confirmar el cambio o
-resolverlo en **Ajustes → Sincronización**. Esto también se aplica a las fotos
-nuevas pendientes de subir. Un conflicto requiere revisión explícita; no se
-recalcula automáticamente su revisión. La confirmación mantiene la vista local
-hasta completar una descarga del inventario iniciada después del recibo.
-
-Los originales JPEG, PNG y WebP de hasta 10 MiB se conservan sin recortar ni
-recomprimir. Su caché está cifrada y separada por proyecto, cuenta y rancho, con
-un presupuesto global de 50 MiB de contenido cifrado y expulsión de los archivos
-menos utilizados. Las fotografías expulsadas deben abrirse con conexión otra
-vez. Los adjuntos pendientes de subir se conservan en la cola hasta confirmarse;
-se procesan de uno en uno para limitar la memoria. La decodificación para mostrar
-imágenes limita ambos ejes a 320 píxeles en miniaturas, 1200 en la galería/editor
-y 2048 en el visor, sin modificar los bytes originales.
-
-D4 introdujo la versión 11 de la base local. El contrato de operaciones compartido está
-en `contracts/sync/v1/operation.schema.json` y contiene las mismas 20 acciones
-que Web D4. El servidor requiere las migraciones correspondientes del repositorio
-Ganaderov; estos cambios de cliente no instalan SQL ni modifican producción.
-
-Pruebas específicas:
-
-```sh
-flutter test test/photo_store_test.dart test/photo_repository_test.dart test/photo_gallery_test.dart test/photo_crop_test.dart test/animal_photos_test.dart
-```
-# Ganaderov-Mobile
+**Proyecto mantenido por [SkContreras](https://github.com/SkContreras).** No se ha especificado una licencia pública para este repositorio; la visibilidad del código no constituye por sí sola permiso de redistribución.
