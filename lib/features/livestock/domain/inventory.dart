@@ -43,12 +43,14 @@ class InventoryAnimal {
 }
 
 class InventorySnapshot {
-  const InventorySnapshot({required this.status, this.ranchName = '', this.role = '', this.records = const [], this.statusOptions = const {}, this.statusLabels = const {}, this.config = const {}, this.ownerId = '', this.userId = '', this.configRevision = 0, this.offline = false, this.cachedAt});
+  const InventorySnapshot({required this.status, this.ranchName = '', this.role = '', this.records = const [], this.statusOptions = const {}, this.statusLabels = const {}, this.config = const {}, this.ownerId = '', this.userId = '', this.configRevision = 0, this.offline = false, this.cachedAt, this.photoSyncStates = const {}});
   final String status, ranchName, role, ownerId, userId;
   final Map<String, dynamic> config;
   final int configRevision;
   final bool offline;
   final DateTime? cachedAt;
+  // Presentation only. Pending operations never become the authoritative cache.
+  final Map<String, String> photoSyncStates;
   bool get canManage => !offline && status == 'active' && (role == 'owner' || role == 'admin');
   final List<Map<String, dynamic>> records;
   final Map<String, bool> statusOptions;

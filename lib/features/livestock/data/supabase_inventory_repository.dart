@@ -18,10 +18,12 @@ import '../domain/event_draft.dart';
 import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
-class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalLifecycleWriter, AnimalPhotos, AnimalPhotoRemoval, AnimalEventWriter, JourneyRepository, ExtendedJourneyRepository, OutboxAccess, ConflictAccess, AnalysisPreferences, ForecastWriter {
+class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalLifecycleWriter, AnimalPhotos, AnimalPhotoRemoval, AnimalPhotoFraming, OfflineAnimalPhotos, AnimalEventWriter, JourneyRepository, ExtendedJourneyRepository, OutboxAccess, ConflictAccess, AnalysisPreferences, ForecastWriter {
   SupabaseInventoryRepository(this.client,{this.store,this.onSynced,this.eventRpcEnabled=false,this.journeyRpcEnabled=false,this.universalEnabled=false,this.incrementalEnabled=false,this.project=''});
   final bool universalEnabled,incrementalEnabled;
   final String project;
+  String? _activePhotoOwner;
+  String? _activePhotoRole;
   UniversalSync get _universal=>UniversalSync(client,store??(throw StateError('Almacenamiento no disponible')),project);
   Future<void> queueOperation(InventorySnapshot s,String action,String id,Map<String,dynamic> changes,{int? revision,String? attachment})async{
     if(!universalEnabled||s.status!='active'||s.userId!=client.auth.currentUser?.id)throw StateError('Operación no disponible');
@@ -50,28 +52,42 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final (user,owner)=await _reviewScope();
     final rows=await store!.reviewUniversal(user,owner);
     _universal.verify(user);
-    return rows.map((r)=>{...r,'reviewUser':user,'reviewOwner':owner}).toList();
+    final scoped=<Map<String,dynamic>>[];
+    for(final row in rows){
+      if(((row['operation'] as Map)['action'] as String).startsWith('photo.')){
+        final origin=await store!.photoOperationProject(user,owner,row['id'] as String);
+        if(origin!=null&&origin!=project)continue;
+      }
+      scoped.add({...row,'reviewUser':user,'reviewOwner':owner,'reviewProject':project});
+    }
+    _universal.verify(user);
+    return scoped;
   }
-  void _verifyEntry(Map<String,dynamic> entry,String user,String owner){
+  Future<void> _verifyEntry(Map<String,dynamic> entry,String user,String owner)async{
     if(entry['reviewUser']!=user||entry['reviewOwner']!=owner||(entry['operation'] as Map)['ownerId']!=owner)throw StateError('Ámbito modificado');
+    if(((entry['operation'] as Map)['action'] as String).startsWith('photo.')){
+      final origin=await store!.photoOperationProject(user,owner,entry['id'] as String);
+      if(entry['reviewProject']!=project||(origin!=null&&origin!=project))throw StateError('Proyecto modificado');
+    }
+    _universal.verify(user);
   }
   @override Future<Map<String,dynamic>> currentConflictEntity(Map<String,dynamic> entry)async{
-    final (user,owner)=await _reviewScope();_verifyEntry(entry,user,owner);
+    final (user,owner)=await _reviewScope();await _verifyEntry(entry,user,owner);
     final op=Map<String,dynamic>.from(entry['operation'] as Map);
     return _universal.entity(user,owner,(op['action'] as String).split('.').first,op['entityId'] as String);
   }
   @override Future<void> archiveOperation(Map<String,dynamic> entry,bool archive)async{
-    final (user,owner)=await _reviewScope();_verifyEntry(entry,user,owner);
+    final (user,owner)=await _reviewScope();await _verifyEntry(entry,user,owner);
     await store!.archiveUniversal(user,owner,entry['id'] as String,archive);
   }
   @override Future<void> resolveOperation(Map<String,dynamic> entry,Map<String,dynamic> reviewed,List<String> selected)async{
     if(!universalEnabled)throw StateError('Motor universal desactivado');
-    final (user,owner)=await _reviewScope();_verifyEntry(entry,user,owner);
+    final (user,owner)=await _reviewScope();await _verifyEntry(entry,user,owner);
     final op=Map<String,dynamic>.from(entry['operation'] as Map);
     final current=await _universal.entity(user,owner,(op['action'] as String).split('.').first,op['entityId'] as String);
     final replacement=replacementOperation(op,reviewed,current,selected,const Uuid().v4(),DateTime.now().toUtc().toIso8601String());
     _universal.verify(user);
-    await store!.replaceConflict(user,owner,entry['id'] as String,op,replacement);
+    await store!.replaceConflict(user,owner,entry['id'] as String,op,replacement,project:project);
     unawaited(syncEvents().catchError((Object _){}));
   }
   void _quoteScope(InventorySnapshot s){
@@ -194,9 +210,10 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final id=client.auth.currentUser?.id;
     if(id==null||client.auth.currentSession==null)throw StateError('Sesión no disponible');
     final generation=++_loadGeneration;
+    final photoAcknowledgements=supportsOfflinePhotoChanges?await store!.confirmedPhotoOperations(id,project):<String>[];
     bool valid()=>generation==_loadGeneration&&client.auth.currentUser?.id==id&&client.auth.currentSession!=null;
     InventorySnapshot result;
-    try {result=await _loadRemote(onMembership:(ownerId)async{
+    try {result=await _loadRemote(verifyScope:(){if(!valid())throw StateError('Consulta reemplazada o sesión modificada.');},onMembership:(ownerId)async{
       if(!valid())throw StateError('Consulta reemplazada o sesión modificada.');
       if(ownerId==null){await store?.purge(id);}else{await store?.invalidateOtherRanch(id,ownerId);}
     }).timeout(const Duration(seconds:25));}
@@ -204,22 +221,32 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
       if(!valid())rethrow;
       final network=e is SocketException||e is TimeoutException||e is AuthRetryableFetchException||e is http.ClientException;
       if(!network){await store?.purge(id);rethrow;}
-      final cached=await store?.read(id);
+      final cached=await store?.read(id,project:project);
       if(cached==null||!valid())rethrow;
-      return cached;
+      return _projectPhotoSnapshot(cached);
     }
     if(!valid())throw StateError('La consulta o sesión cambió');
-    try{if(result.status=='active'){await store?.save(result);}else{await store?.purge(id);}}catch(_){}
+    try{
+      if(result.status=='active'){
+        await store?.transaction(()async{
+          if(!valid())throw StateError('Consulta reemplazada o sesión modificada.');
+          await store!.save(result,project:project);
+          if(universalEnabled)await store!.acknowledgePhotoSnapshot(id,result.ownerId,project,photoAcknowledgements);
+          if(!valid())throw StateError('Consulta reemplazada o sesión modificada.');
+        });
+      }else{await store?.purge(id);}
+    }catch(_){}
     if(!valid()){
       if(client.auth.currentUser?.id!=id||client.auth.currentSession==null)await store?.purge(id);
       throw StateError('La consulta o sesión cambió');
     }
-    return result;
+    return _projectPhotoSnapshot(result);
   }
-  Future<InventorySnapshot> _loadRemote({Future<void> Function(String?)? onMembership}) async {
+  Future<InventorySnapshot> _loadRemote({Future<void> Function(String?)? onMembership,void Function()? verifyScope}) async {
     final userId = client.auth.currentUser?.id;
     if (userId == null) throw StateError('Sesión no disponible');
     void verifySession() {
+      verifyScope?.call();
       if (client.auth.currentUser?.id != userId) throw StateError('La sesión cambió');
     }
     final raw = await client.rpc('get_my_ranch_context');
@@ -227,14 +254,20 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     if (raw is! Map) throw const FormatException('Contexto de rancho inválido');
     final status = raw['status'];
     if (status == 'pending' || status == 'unassigned') {
+      _activePhotoOwner='';
+      _activePhotoRole='';
       await onMembership?.call(null);
       verifySession();
       return InventorySnapshot(status: status as String);
     }
     final ownerId = raw['owner_id'];
     if (status != 'active' || ownerId is! String || ownerId.isEmpty) {
+      _activePhotoOwner='';
+      _activePhotoRole='';
       throw StateError('No se pudo verificar la membresía');
     }
+    _activePhotoOwner=ownerId;
+    _activePhotoRole=raw['role']?.toString();
     await onMembership?.call(ownerId);
     verifySession();
     final mirror=incrementalEnabled?await _universal.pull(userId,ownerId):null;
@@ -280,8 +313,11 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final current = await client.rpc('get_my_ranch_context');
     verifySession();
     if (current is! Map || current['status'] != 'active' || current['owner_id'] != ownerId) {
+      _activePhotoOwner='';
+      _activePhotoRole='';
       throw StateError('La membresía cambió');
     }
+    _activePhotoRole=current['role']?.toString();
     return InventorySnapshot(
       status: 'active',
       ranchName: current['ranch_name']?.toString() ?? 'Mi rancho',
@@ -292,6 +328,7 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
       ownerId: ownerId, userId: userId,
       config: settings is Map ? Map<String,dynamic>.from(settings) : {},
       configRevision: config?['revision'] as int? ?? 0,
+      cachedAt: DateTime.now(),
     );
   }
 
@@ -387,19 +424,116 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     onSynced?.call();
   }
 
+  @override bool get supportsOfflinePhotoChanges=>universalEnabled&&store!=null;
+
+  void _photoScope(InventorySnapshot snapshot,{required bool write}) {
+    if(snapshot.status!='active'||snapshot.ownerId.isEmpty||snapshot.userId.isEmpty||client.auth.currentUser?.id!=snapshot.userId||client.auth.currentSession==null||!['owner','admin','worker'].contains(snapshot.role)||(write&&!['owner','admin'].contains(snapshot.role)))throw StateError('La sesión o los permisos cambiaron.');
+    if((_activePhotoOwner!=null&&_activePhotoOwner!=snapshot.ownerId)||(_activePhotoRole!=null&&!['owner','admin','worker'].contains(_activePhotoRole))||(write&&_activePhotoRole!=null&&!['owner','admin'].contains(_activePhotoRole)))throw StateError('La membresía cambió. Actualiza el inventario.');
+    final age=snapshot.cachedAt==null?null:DateTime.now().difference(snapshot.cachedAt!);
+    if((snapshot.offline&&age==null)||(age!=null&&(age.isNegative||age>const Duration(hours:24))))throw StateError('Actualiza el inventario antes de usar las fotografías.');
+  }
+
+  Future<InventorySnapshot> _projectPhotoSnapshot(InventorySnapshot snapshot)async{
+    if(!supportsOfflinePhotoChanges||snapshot.status!='active')return snapshot;
+    _photoScope(snapshot,write:false);
+    final changes=await store!.photoChanges(snapshot.userId,snapshot.ownerId,project);
+    _photoScope(snapshot,write:false);
+    return projectPhotoChanges(snapshot,changes);
+  }
+
+  @override Future<InventorySnapshot> refreshPhotoChanges(InventorySnapshot snapshot)async{
+    _photoScope(snapshot,write:false);
+    final cached=await store?.read(snapshot.userId,project:project);
+    _photoScope(snapshot,write:false);
+    if(cached==null||cached.ownerId!=snapshot.ownerId)throw StateError('Actualiza el inventario.');
+    return _projectPhotoSnapshot(InventorySnapshot(
+      status:cached.status,ranchName:cached.ranchName,role:cached.role,records:cached.records,
+      statusOptions:cached.statusOptions,statusLabels:cached.statusLabels,config:cached.config,
+      ownerId:cached.ownerId,userId:cached.userId,configRevision:cached.configRevision,
+      offline:snapshot.offline,cachedAt:cached.cachedAt,
+    ));
+  }
+
+  List<Map<String,dynamic>> _localPhotos(InventorySnapshot snapshot,String animalId){
+    final row=snapshot.records.where((r)=>r['animal_id']==animalId&&r['deleted_at']==null).firstOrNull;
+    if(row==null)throw StateError('Animal no disponible.');
+    return _photoList(row);
+  }
+
+  Future<int> _photoRevision(InventorySnapshot snapshot,String animalId,String photoId,Map<String,dynamic> selected)async{
+    final db=store??(throw StateError('Almacenamiento no disponible.'));
+    final local=await db.readPhotoMetadata(snapshot.userId,snapshot.ownerId,project,photoId);
+    _photoScope(snapshot,write:false);
+    if(local!=null&&local['parentId']==animalId&&_sameJson(local['data'],selected))return local['revision'] as int;
+    if(snapshot.offline)throw StateError('Abre esta fotografía con conexión para disponer de su revisión antes de editarla sin conexión.');
+    await _photoContext(snapshot,write:false);
+    final entity=await _universal.entity(snapshot.userId,snapshot.ownerId,'photo',photoId);
+    _photoScope(snapshot,write:false);
+    if(entity['parentId']!=animalId||!_sameJson(entity['data'],selected))throw StateError('La fotografía cambió. Actualiza la galería.');
+    await db.savePhotoMetadata(snapshot.userId,snapshot.ownerId,project,photoId,entity,verify:()=>_photoScope(snapshot,write:false));
+    _photoScope(snapshot,write:false);
+    return entity['revision'] as int;
+  }
+
+  Future<void> _queuePhotoMetadata(InventorySnapshot snapshot,String animalId,String photoId,String action,Map<String,dynamic> changes)async{
+    _photoScope(snapshot,write:true);
+    final photos=_localPhotos(snapshot,animalId);
+    final selected=photos.where((p)=>p['id']==photoId&&(p['animalId']==null||p['animalId']==animalId)&&p['storagePath']=='${snapshot.ownerId}/$animalId/$photoId').singleOrNull;
+    if(selected==null)throw StateError('Fotografía no disponible.');
+    final revision=await _photoRevision(snapshot,animalId,photoId,selected);
+    _photoScope(snapshot,write:true);
+    await _universal.enqueue(snapshot.userId,snapshot.ownerId,action,photoId,changes,revision:revision,expectedPhoto:selected,verifyPhoto:()=>_photoScope(snapshot,write:true));
+    if(!snapshot.offline)unawaited(syncEvents().catchError((Object _){}));
+  }
+
   Future<Map<dynamic,dynamic>> _photoContext(InventorySnapshot snapshot,{required bool write}) async {
-    if(snapshot.ownerId.isEmpty || snapshot.userId.isEmpty || client.auth.currentUser?.id!=snapshot.userId) throw StateError('La sesión cambió.');
+    _photoScope(snapshot,write:write);
     final context=await client.rpc('get_my_ranch_context');
-    if(client.auth.currentUser?.id!=snapshot.userId || context is! Map || context['status']!='active' || context['owner_id']!=snapshot.ownerId || (write && !['owner','admin'].contains(context['role']))) throw StateError('No tienes permiso para esta operación.');
+    _photoScope(snapshot,write:write);
+    _activePhotoOwner=context is Map&&context['status']=='active'?context['owner_id']?.toString()??'':'';
+    _activePhotoRole=context is Map?context['role']?.toString()??'':'';
+    _photoScope(snapshot,write:write);
+    if(context is! Map || context['status']!='active' || context['owner_id']!=snapshot.ownerId || (write && !['owner','admin'].contains(context['role']))) throw StateError('No tienes permiso para esta operación.');
     return context;
   }
 
+  final _photoRequests=<String,Future<Uint8List>>{};
   @override
   Future<Uint8List> readPhoto(InventorySnapshot snapshot,String animalId,AnimalPhoto photo) async {
-    await _photoContext(snapshot,write:false);
+    _photoScope(snapshot,write:false);
     if(!AnimalPhoto.fromSnapshot(snapshot,animalId).any((p)=>p.id==photo.id&&p.path==photo.path)) throw StateError('Fotografía inválida.');
-    final bytes=await client.storage.from('animal-photos').download(photo.path);
-    if(client.auth.currentUser?.id!=snapshot.userId) throw StateError('La sesión cambió.');
+    final key=jsonEncode([snapshot.userId,snapshot.ownerId,project,photo.path]);
+    final request=_photoRequests.putIfAbsent(key,()=>_readPhotoBytes(snapshot,animalId,photo));
+    try{
+      final bytes=await request;
+      _photoScope(snapshot,write:false);
+      return bytes;
+    }finally{if(identical(_photoRequests[key],request))_photoRequests.remove(key);}
+  }
+
+  Future<Uint8List> _readPhotoBytes(InventorySnapshot snapshot,String animalId,AnimalPhoto photo)async{
+    final cached=await store?.readPhotoOriginal(snapshot.userId,snapshot.ownerId,project,photo.path);
+    _photoScope(snapshot,write:false);
+    if(cached!=null){
+      // Refresh revision metadata online even when the immutable file is cached.
+      if(supportsOfflinePhotoChanges&&!snapshot.offline&&!snapshot.photoSyncStates.containsKey(animalId)){
+        try{await _photoRevision(snapshot,animalId,photo.id,_localPhotos(snapshot,animalId).singleWhere((p)=>p['id']==photo.id));}catch(_){_photoScope(snapshot,write:false);}
+      }
+      return cached;
+    }
+    final pending=await store?.pendingPhotoOriginal(snapshot.userId,snapshot.ownerId,project,photo.id);
+    _photoScope(snapshot,write:false);
+    if(pending!=null)return pending;
+    if(snapshot.offline)throw StateError('Esta fotografía no está guardada en el dispositivo. Ábrela con conexión para usarla sin conexión.');
+    await _photoContext(snapshot,write:false);
+    final bytes=await client.storage.from('animal-photos').download(photo.path).timeout(const Duration(seconds:20));
+    _photoScope(snapshot,write:false);
+    if(bytes.length>PhotoStore.maxOriginalBytes||imageMime(bytes)==null)throw StateError('Selecciona JPEG, PNG o WebP de hasta 10 MB.');
+    await store?.savePhotoOriginal(snapshot.userId,snapshot.ownerId,project,photo.path,bytes,verify:()=>_photoScope(snapshot,write:false));
+    if(supportsOfflinePhotoChanges&&!snapshot.photoSyncStates.containsKey(animalId)){
+      try{await _photoRevision(snapshot,animalId,photo.id,_localPhotos(snapshot,animalId).singleWhere((p)=>p['id']==photo.id));}catch(_){_photoScope(snapshot,write:false);}
+    }
+    _photoScope(snapshot,write:false);
     return bytes;
   }
   Future<Map<String,dynamic>> _photoRow(InventorySnapshot snapshot,String animalId) async {
@@ -437,7 +571,10 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final id=const Uuid().v4();
     final path='${snapshot.ownerId}/$animalId/$id';
     await _photoContext(snapshot,write:true);
-    if(universalEnabled){await queueOperation(snapshot,'photo.create',id,{'animalId':animalId,'mime':mime,'name':name,'primary':photos.isEmpty},attachment:base64Encode(bytes));return;}
+    if(universalEnabled){
+      await store?.savePhotoOriginal(snapshot.userId,snapshot.ownerId,project,path,bytes,verify:()=>_photoScope(snapshot,write:true));
+      await queueOperation(snapshot,'photo.create',id,{'animalId':animalId,'mime':mime,'name':name,'primary':photos.isEmpty},attachment:base64Encode(bytes));return;
+    }
     await client.storage.from('animal-photos').uploadBinary(path,bytes,fileOptions:FileOptions(contentType:mime,upsert:false));
     photos.add({'id':id,'animalId':animalId,'name':name,'mime':mime,'primary':photos.isEmpty,'createdAt':DateTime.now().toUtc().toIso8601String(),'cropX':50,'cropY':50,'storagePath':path});
     // Never delete after an ambiguous network failure: the row may have committed.
@@ -445,6 +582,11 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
   }
   @override
   Future<void> primaryPhoto(InventorySnapshot snapshot,String animalId,String photoId) async {
+    if(universalEnabled){
+      _photoScope(snapshot,write:true);
+      final prior=_localPhotos(snapshot,animalId).where((p)=>p['primary']==true).firstOrNull;
+      await _queuePhotoMetadata(snapshot,animalId,photoId,'photo.primary',{'animalId':animalId,'previousPrimaryId':prior?['id']});return;
+    }
     final row=await _photoRow(snapshot,animalId);
     final photos=_photoList(row);
     if(!photos.any((p)=>p['id']==photoId&&p['animalId']==animalId)) throw StateError('Fotografía no encontrada.');
@@ -453,12 +595,21 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
   }
 
   @override
+  Future<void> savePhotoCrop(InventorySnapshot snapshot,String animalId,String photoId,PhotoCrop crop)async{
+    if(!crop.valid)throw ArgumentError('Encuadre inválido');
+    if(universalEnabled){await _queuePhotoMetadata(snapshot,animalId,photoId,'photo.crop',crop.changes(animalId));return;}
+    final row=await _photoRow(snapshot,animalId),photos=_photoList(row);
+    final selected=photos.where((p)=>p['id']==photoId&&p['animalId']==animalId).firstOrNull;
+    if(selected==null)throw StateError('Fotografía no disponible');
+    selected.addAll(crop.changes(animalId));await _writePhotos(snapshot,animalId,row,photos);
+  }
+  @override
   Future<void> removePhoto(InventorySnapshot snapshot,String animalId,String photoId) async {
+    if(universalEnabled){await _queuePhotoMetadata(snapshot,animalId,photoId,'photo.delete',{'animalId':animalId});return;}
     final row=await _photoRow(snapshot,animalId);
     final photos=_photoList(row);
     final matches=photos.where((p)=>p['id']==photoId&&p['animalId']==animalId&&p['storagePath']=='${snapshot.ownerId}/$animalId/$photoId').toList();
     if(matches.length!=1)throw StateError('Fotografía no encontrada o inválida.');
-    if(universalEnabled){await queueOperation(snapshot,'photo.delete',photoId,{'animalId':animalId},revision:await _revision(snapshot,'photo',photoId,matches.single));return;}
     final wasPrimary=matches.single['primary']==true;
     photos.remove(matches.single);
     if(wasPrimary&&photos.isNotEmpty){

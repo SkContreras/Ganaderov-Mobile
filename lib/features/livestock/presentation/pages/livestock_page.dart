@@ -84,6 +84,18 @@ class _LivestockPageState extends State<LivestockPage> {
     }
   }
 
+  Future<void> _photoChanged(String animalId)async{
+    final repository=widget.repository,snapshot=_snapshot,request=_request;
+    if(snapshot==null)return;
+    if(repository is OfflineAnimalPhotos&&(repository as OfflineAnimalPhotos).supportsOfflinePhotoChanges){
+      final next=await (repository as OfflineAnimalPhotos).refreshPhotoChanges(snapshot);
+      if(!mounted||request!=_request||!widget.auth.signedIn)return;
+      setState((){_snapshot=next;_animals=next.animals;_selectedId=animalId;});
+    }else{
+      await _load(keepSelected:animalId);
+    }
+  }
+
   bool _statusBusy=false;
   Future<void> _changeStatus(InventoryAnimal animal)async{
     final snapshot=_snapshot,repository=widget.repository;
@@ -126,7 +138,7 @@ class _LivestockPageState extends State<LivestockPage> {
     if (selected != null) {
       return PopScope(canPop: false, onPopInvokedWithResult: (didPop, result) {
         if (!didPop) setState(() => _selectedId = null);
-      }, child: _AnimalDetail(animal: selected, onRegister: selected.active && widget.repository is AnimalEventWriter && ['owner','admin','worker'].contains(_snapshot?.role) ? (type) => _registerEvent(selected,type) : null, gallery: widget.repository is AnimalPhotos && _snapshot != null && !_snapshot!.offline ? AnimalGallery(snapshot: _snapshot!, animal: selected, repository: widget.repository as AnimalPhotos, onChanged: () => _load(keepSelected: selected.id)) : null, onEdit: _snapshot?.canManage == true && widget.repository is AnimalWriter ? () => _edit(selected) : null, onChangeStatus: !_statusBusy && _snapshot?.canManage == true && widget.repository is AnimalLifecycleWriter ? () => _changeStatus(selected) : null, onBack: () => setState(() => _selectedId = null)));
+      }, child: _AnimalDetail(animal: selected, onRegister: selected.active && widget.repository is AnimalEventWriter && ['owner','admin','worker'].contains(_snapshot?.role) ? (type) => _registerEvent(selected,type) : null, gallery: widget.repository is AnimalPhotos && _snapshot != null ? AnimalGallery(snapshot: _snapshot!, animal: selected, repository: widget.repository as AnimalPhotos, onChanged: () => _photoChanged(selected.id)) : null, onEdit: _snapshot?.canManage == true && widget.repository is AnimalWriter ? () => _edit(selected) : null, onChangeStatus: !_statusBusy && _snapshot?.canManage == true && widget.repository is AnimalLifecycleWriter ? () => _changeStatus(selected) : null, onBack: () => setState(() => _selectedId = null)));
     }
     return SafeArea(top: false, child: RefreshIndicator(
       onRefresh: _load,

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'local_cipher.dart';
 import 'local_key.dart';
 import 'package:uuid/uuid.dart';
@@ -8,6 +9,8 @@ import '../../features/livestock/domain/event_draft.dart';
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 import '../../features/livestock/domain/inventory.dart';
+
+part 'photo_store.dart';
 
 class OfflineStore extends GeneratedDatabase {
   OfflineStore([QueryExecutor? executor, this.cipher]):super(executor??driftDatabase(name:'ganaderov_local'));
@@ -28,7 +31,7 @@ class OfflineStore extends GeneratedDatabase {
   }
   String _scope(List<String> parts)=>jsonEncode(parts);
   Future<bool> _hasEncryptedData()async{
-    final rows=await customSelect("SELECT 1 FROM inventory_cache WHERE payload LIKE 'gcm1:%' OR payload LIKE 'gcm2:%' UNION ALL SELECT 1 FROM event_outbox WHERE payload LIKE 'gcm1:%' OR payload LIKE 'gcm2:%' LIMIT 1").get();
+    final rows=await customSelect("SELECT 1 FROM (SELECT payload FROM inventory_cache UNION ALL SELECT payload FROM event_outbox UNION ALL SELECT payload FROM universal_outbox UNION ALL SELECT payload FROM incremental_mirror UNION ALL SELECT payload FROM journey_cache UNION ALL SELECT payload FROM analysis_preferences UNION ALL SELECT payload FROM photo_metadata UNION ALL SELECT payload FROM photo_originals) WHERE payload LIKE 'gcm1:%' OR payload LIKE 'gcm2:%' LIMIT 1").get();
     return rows.isNotEmpty;
   }
   String _seal(String text,List<String> parts){
@@ -48,7 +51,7 @@ class OfflineStore extends GeneratedDatabase {
     return text;
   }
   List<String> _eventScope(String user,String owner,String event,String field)=>['outbox',user,owner,event,field];
-  @override int get schemaVersion=>10;
+  @override int get schemaVersion=>11;
   @override Iterable<TableInfo<Table,Object?>> get allTables=>const [];
   @override List<DatabaseSchemaEntity> get allSchemaEntities=>const [];
   @override MigrationStrategy get migration=>MigrationStrategy(onCreate:(_)async{
@@ -60,8 +63,9 @@ class OfflineStore extends GeneratedDatabase {
     await _upgradeConflictReview();
     await _createAnalysisPreferences();
     await _createJourneyCache();
+    await _createPhotoCache();
     await _protectExisting();
-  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<6)await _protectExisting();if(from<7)await _createUniversal();if(from<8)await _upgradeConflictReview();if(from<9)await _createAnalysisPreferences();if(from<10)await _createJourneyCache();});
+  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<6)await _protectExisting();if(from<7)await _createUniversal();if(from<8)await _upgradeConflictReview();if(from<9)await _createAnalysisPreferences();if(from<10)await _createJourneyCache();if(from<11)await _createPhotoCache();});
   Future<void> _createUniversal()async{
     await customStatement('CREATE TABLE universal_outbox (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,operation_id TEXT NOT NULL,payload TEXT NOT NULL,attachment TEXT,state TEXT NOT NULL DEFAULT \'pending\',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,receipt TEXT,PRIMARY KEY(user_id,owner_id,operation_id))');
     await customStatement('CREATE TABLE incremental_mirror (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
@@ -107,7 +111,7 @@ class OfflineStore extends GeneratedDatabase {
       await customStatement("UPDATE universal_outbox SET state=archived_from WHERE user_id=? AND owner_id=? AND operation_id=? AND state='archived' AND archived_from IN ('conflict','rejected') AND resolved_by IS NULL",[user,owner,id]);
     }
   }
-  Future<void> replaceConflict(String user,String owner,String original,Map<String,dynamic> expected,Map<String,dynamic> replacement)async{
+  Future<void> replaceConflict(String user,String owner,String original,Map<String,dynamic> expected,Map<String,dynamic> replacement,{String? project})async{
     await transaction(()async{
       final old=await customSelect("SELECT payload,state,resolved_by FROM universal_outbox WHERE user_id=? AND owner_id=? AND operation_id=?",variables:[Variable.withString(user),Variable.withString(owner),Variable.withString(original)]).getSingleOrNull();
       if(old==null||!['conflict','rejected','archived'].contains(old.read<String>('state'))||old.readNullable<String>('resolved_by')!=null||_open(old.read<String>('payload'),['universal',user,owner,original])!=jsonEncode(expected))throw StateError('La operación cambió');
@@ -115,6 +119,11 @@ class OfflineStore extends GeneratedDatabase {
       await enqueueUniversal(user,owner,replacement);
       await customStatement("UPDATE universal_outbox SET resolves=? WHERE user_id=? AND owner_id=? AND operation_id=?",[original,user,owner,replacement['operationId']]);
       await customStatement("UPDATE universal_outbox SET archived_from=state,state='archived',resolved_by=? WHERE user_id=? AND owner_id=? AND operation_id=?",[replacement['operationId'],user,owner,original]);
+      if((replacement['action'] as String).startsWith('photo.')){
+        final capturedProject=await photoOperationProject(user,owner,original);
+        if(project==null||(capturedProject!=null&&capturedProject!=project))throw StateError('Proyecto de fotografía no verificado');
+        await customStatement('INSERT INTO photo_local_changes(user_id,owner_id,project,animal_id,operation_id) VALUES(?,?,?,?,?)',[user,owner,project,(replacement['changes'] as Map)['animalId'],replacement['operationId']]);
+      }
     });
   }
   Future<String> installationId()=>_deviceId();
@@ -134,16 +143,23 @@ class OfflineStore extends GeneratedDatabase {
     });
   }
   Future<List<Map<String,dynamic>>> universalPending(String user,String owner)async{
-    final rows=await customSelect("SELECT * FROM universal_outbox WHERE user_id=? AND owner_id=? AND state='pending' ORDER BY rowid",variables:[Variable.withString(user),Variable.withString(owner)]).get();
+    final rows=await customSelect("SELECT operation_id,payload,attempts,next_at FROM universal_outbox WHERE user_id=? AND owner_id=? AND state='pending' ORDER BY rowid",variables:[Variable.withString(user),Variable.withString(owner)]).get();
     return rows.map((row){
       final id=row.read<String>('operation_id'),scope=['universal',user,owner,row.read<String>('operation_id')];
-      final attachment=row.readNullable<String>('attachment');
-      return <String,dynamic>{'id':id,'operation':jsonDecode(_open(row.read<String>('payload'),scope)),'attachment':attachment==null?null:_open(attachment,[...scope,'attachment']),'attempts':row.read<int>('attempts'),'nextAt':row.read<int>('next_at')};
+      return <String,dynamic>{'id':id,'operation':jsonDecode(_open(row.read<String>('payload'),scope)),'attempts':row.read<int>('attempts'),'nextAt':row.read<int>('next_at')};
     }).toList();
+  }
+  Future<String?> universalAttachment(String user,String owner,String id)async{
+    final row=await customSelect('SELECT attachment FROM universal_outbox WHERE user_id=? AND owner_id=? AND operation_id=?',variables:[Variable.withString(user),Variable.withString(owner),Variable.withString(id)]).getSingleOrNull();
+    final attachment=row?.readNullable<String>('attachment');
+    return attachment==null?null:_open(attachment,['universal',user,owner,id,'attachment']);
   }
   Future<void> settleUniversal(String user,String owner,String id,String state,Map<String,dynamic>? receipt,int nextAt)async{
     if(!['pending','confirmed','conflict','rejected'].contains(state))throw ArgumentError('Estado inválido');
-    await customStatement("UPDATE universal_outbox SET state=?,receipt=?,attempts=attempts+1,next_at=? WHERE user_id=? AND owner_id=? AND operation_id=? AND state='pending'",[state,receipt==null?null:_seal(jsonEncode(receipt),['universal',user,owner,id,'receipt']),nextAt,user,owner,id]);
+    await transaction(()async{
+      await customStatement("UPDATE universal_outbox SET state=?,receipt=?,attempts=attempts+1,next_at=? WHERE user_id=? AND owner_id=? AND operation_id=? AND state='pending'",[state,receipt==null?null:_seal(jsonEncode(receipt),['universal',user,owner,id,'receipt']),nextAt,user,owner,id]);
+      if(state=='confirmed')await customStatement("UPDATE universal_outbox SET attachment=NULL WHERE user_id=? AND owner_id=? AND operation_id=? AND state='confirmed'",[user,owner,id]);
+    });
   }
   Future<Map<String,dynamic>?> readMirror(String user,String owner,String project)async{
     final row=await customSelect('SELECT payload FROM incremental_mirror WHERE user_id=? AND owner_id=? AND project=?',variables:[Variable.withString(user),Variable.withString(owner),Variable.withString(project)]).getSingleOrNull();
@@ -166,7 +182,8 @@ class OfflineStore extends GeneratedDatabase {
       final rows=await customSelect('SELECT * FROM inventory_cache').get();
       for(final row in rows){
         final user=row.read<String>('user_id'),owner=row.read<String>('owner_id');
-        await customStatement('UPDATE inventory_cache SET payload=? WHERE user_id=?',[migrate(row.read<String>('payload'),['inventory',user,owner]),user]);
+        final project=row.data['project'] as String?;
+        await customStatement('UPDATE inventory_cache SET payload=? WHERE user_id=?',[migrate(row.read<String>('payload'),['inventory',user,owner,if(project!=null)project]),user]);
       }
       for(final row in await customSelect('SELECT * FROM event_outbox').get()){
         final user=row.read<String>('user_id'),owner=row.read<String>('owner_id'),event=row.read<String>('event_id');
@@ -194,28 +211,30 @@ class OfflineStore extends GeneratedDatabase {
     return (await customSelect('SELECT device_id FROM sync_installation WHERE id=1').getSingle()).read<String>('device_id');
   }
   Future<void> _createOutbox()=>customStatement('CREATE TABLE event_outbox (user_id TEXT NOT NULL, owner_id TEXT NOT NULL, event_id TEXT NOT NULL, animal_id TEXT NOT NULL, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT \'\', PRIMARY KEY(user_id,owner_id,event_id))');
-  Future<void> save(InventorySnapshot s)async{
+  Future<void> save(InventorySnapshot s,{String? project})async{
     if(s.status!='active'||s.userId.isEmpty||s.ownerId.isEmpty||s.offline)throw StateError('Instantánea no válida');
     final json=jsonEncode({'ranchName':s.ranchName,'role':s.role,'records':s.records,'statusOptions':s.statusOptions,'statusLabels':s.statusLabels,'config':s.config,'configRevision':s.configRevision});
-    await customStatement('INSERT INTO inventory_cache(user_id,owner_id,saved_at,payload) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET owner_id=excluded.owner_id,saved_at=excluded.saved_at,payload=excluded.payload',[s.userId,s.ownerId,DateTime.now().millisecondsSinceEpoch,_seal(json,['inventory',s.userId,s.ownerId])]);
+    await customStatement('INSERT INTO inventory_cache(user_id,owner_id,saved_at,payload,project) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET owner_id=excluded.owner_id,saved_at=excluded.saved_at,payload=excluded.payload,project=excluded.project',[s.userId,s.ownerId,DateTime.now().millisecondsSinceEpoch,_seal(json,['inventory',s.userId,s.ownerId,if(project!=null)project]),project]);
   }
-  Future<InventorySnapshot?> read(String userId)async{
-    final row=await customSelect('SELECT owner_id,saved_at,payload FROM inventory_cache WHERE user_id = ?',variables:[Variable.withString(userId)]).getSingleOrNull();
+  Future<InventorySnapshot?> read(String userId,{String? project})async{
+    final row=await customSelect('SELECT owner_id,saved_at,payload,project FROM inventory_cache WHERE user_id = ?',variables:[Variable.withString(userId)]).getSingleOrNull();
     if(row==null)return null;
+    if(project!=null&&row.readNullable<String>('project')!=project)return null;
     final saved=DateTime.fromMillisecondsSinceEpoch(row.read<int>('saved_at'));
     final age=DateTime.now().difference(saved);
     if(age.isNegative||age>const Duration(hours:24)){await purge(userId);return null;}
-    final p=jsonDecode(_open(row.read<String>('payload'),['inventory',userId,row.read<String>('owner_id')])) as Map<String,dynamic>;
+    final storedProject=row.readNullable<String>('project');
+    final p=jsonDecode(_open(row.read<String>('payload'),['inventory',userId,row.read<String>('owner_id'),if(storedProject!=null)storedProject])) as Map<String,dynamic>;
     if(!['owner','admin','worker'].contains(p['role'])||row.read<String>('owner_id').isEmpty){await purge(userId);return null;}
     final s=InventorySnapshot(status:'active',ranchName:p['ranchName'] as String,role:p['role'] as String,userId:userId,ownerId:row.read<String>('owner_id'),records:(p['records'] as List).map((e)=>Map<String,dynamic>.from(e as Map)).toList(),statusOptions:Map<String,bool>.from(p['statusOptions'] as Map),statusLabels:Map<String,String>.from(p['statusLabels'] as Map),config:Map<String,dynamic>.from(p['config'] as Map),configRevision:p['configRevision'] as int,offline:true,cachedAt:saved);
     // Validate shape before exposing cached data.
     s.animals;
     return s;
   }
-  Future<void> purge(String userId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id=?',[userId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id=?',[userId]);await customStatement('DELETE FROM journey_cache WHERE user_id=?',[userId]);});
-  Future<void> purgeAll()=>transaction(()async{await customStatement('DELETE FROM inventory_cache');await customStatement('DELETE FROM incremental_mirror');await customStatement('DELETE FROM journey_cache');});
-  Future<void> retainOnly(String userId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id<>?',[userId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id<>?',[userId]);await customStatement('DELETE FROM journey_cache WHERE user_id<>?',[userId]);});
-  Future<void> invalidateOtherRanch(String userId,String ownerId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await customStatement('DELETE FROM journey_cache WHERE user_id=? AND owner_id<>?',[userId,ownerId]);});
+  Future<void> purge(String userId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id=?',[userId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id=?',[userId]);await customStatement('DELETE FROM journey_cache WHERE user_id=?',[userId]);await _purgePhotoCache('user_id=?',[userId]);});
+  Future<void> purgeAll()=>transaction(()async{await customStatement('DELETE FROM inventory_cache');await customStatement('DELETE FROM incremental_mirror');await customStatement('DELETE FROM journey_cache');await _purgePhotoCache('1=1',[]);});
+  Future<void> retainOnly(String userId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id<>?',[userId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id<>?',[userId]);await customStatement('DELETE FROM journey_cache WHERE user_id<>?',[userId]);await _purgePhotoCache('user_id<>?',[userId]);});
+  Future<void> invalidateOtherRanch(String userId,String ownerId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await customStatement('DELETE FROM journey_cache WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await _purgePhotoCache('user_id=? AND owner_id<>?',[userId,ownerId]);});
 
   Future<void> enqueue(PendingEvent p,{bool rpc=false})async{
     p.draft.validate();
