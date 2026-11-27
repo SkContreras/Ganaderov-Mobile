@@ -152,6 +152,42 @@ void main() {
     },
   );
 
+  for (final refreshMetadata in [false, true]) {
+    test(
+      'photo changed while the crop editor was open rejects the initial snapshot (metadata refreshed: $refreshMetadata)',
+      () async {
+        final opened = photoSnapshot(offline: true);
+        final refreshed = photoSnapshot();
+        final photos =
+            (refreshed.records.single['payload'] as Map)['photos'] as List;
+        (photos.first as Map)['cropX'] = 90;
+        await db.save(refreshed, project: photoProject);
+        if (refreshMetadata) {
+          final entity = photoEntity(firstPhoto, revision: 8);
+          (entity['data'] as Map)['cropX'] = 90;
+          await db.savePhotoMetadata(
+            photoUser,
+            photoOwner,
+            photoProject,
+            firstPhoto,
+            entity,
+          );
+        }
+        await expectLater(
+          repository.savePhotoCrop(
+            opened,
+            'a',
+            firstPhoto,
+            const PhotoCrop(x: 32, y: 68, zoom: 1.6),
+          ),
+          throwsStateError,
+        );
+        expect(await db.universalPending(photoUser, photoOwner), isEmpty);
+        expect(network, isEmpty);
+      },
+    );
+  }
+
   test('missing revision, expired inventory, wrong project and worker cannot enqueue offline', () async {
     await db.customStatement('DELETE FROM photo_metadata');
     await expectLater(

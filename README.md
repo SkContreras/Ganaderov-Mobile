@@ -124,9 +124,12 @@ sin conexión; una revisión desconocida o vencida requiere volver a abrir la
 fotografía con conexión. Las imágenes antiguas sin `animalId` interno se aceptan
 únicamente cuando su ruta y el padre confirmado corresponden al animal.
 
-Los deslizadores muestran una previsualización y **Guardar** registra una sola
-operación. La previsualización y el estado pendiente se reconstruyen desde la
-cola cifrada después de cerrar y abrir la aplicación. El inventario confirmado
+El editor permite arrastrar la imagen y usar dos dedos para acercar o alejar.
+Los botones **+ / −** y **Restablecer encuadre** ofrecen ajustes accesibles.
+Los gestos muestran una previsualización y **Guardar** registra una sola operación;
+**Cancelar** o cerrar el editor descarta los ajustes. La previsualización y el
+estado pendiente se reconstruyen desde la cola cifrada después de cerrar y abrir
+la aplicación. El inventario confirmado
 se guarda por separado y nunca recibe una revisión inventada a partir de esa
 previsualización. Se permite **una operación de fotografía sin resolver por
 animal**: los controles quedan deshabilitados hasta confirmar el cambio o
