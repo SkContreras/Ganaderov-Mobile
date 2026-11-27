@@ -61,15 +61,16 @@ pantalla inicial está implementada en `features/dashboard/presentation/`.
 
 ```sh
 flutter pub get
-flutter run \
-  --dart-define=SUPABASE_URL=https://your-project.supabase.co \
-  --dart-define=SUPABASE_PUBLISHABLE_KEY=your-supabase-publishable-key
+./tool/flutter_with_env.sh run
+# O para compilar el APK de producción:
+./tool/flutter_with_env.sh build apk --release --flavor production
 ```
 
-La aplicación requiere `SUPABASE_URL` y `SUPABASE_PUBLISHABLE_KEY` al iniciarse. Pasa
-los valores de tu proyecto mediante `--dart-define`; no guardes credenciales
-reales en el repositorio. La clave publicable está pensada para clientes, pero los
-permisos deben protegerse con políticas RLS en Supabase.
+El script carga `SUPABASE_URL` y `SUPABASE_PUBLISHABLE_KEY` desde `.env` y las
+pasa a Flutter con `--dart-define`. `.env` está excluido de Git; mantenlo local y
+no lo compartas. Usa únicamente la clave publicable, nunca una clave `secret` o
+`service_role`. La clave publicable está pensada para clientes, pero los permisos
+deben protegerse con políticas RLS en Supabase.
 
 ## Firma de Android para producción
 
