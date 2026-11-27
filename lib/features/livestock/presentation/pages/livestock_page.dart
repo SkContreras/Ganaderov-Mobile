@@ -612,6 +612,34 @@ class _AnimalCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final weight = animal.latestWeight;
     final colors = Theme.of(context).colorScheme;
+    final summaryFields = <Widget>[];
+    for (final field in configurationFields) {
+      if (!config.detailVisible(field, summary: true) ||
+          field.id == 'name' ||
+          field.id == 'status') {
+        continue;
+      }
+      final raw = animal.fields[field.id];
+      final value = field.kind == 'boolean' && raw is bool
+          ? (raw ? 'Sí' : 'No')
+          : animal.value(field.id);
+      if (value.isEmpty) continue;
+      summaryFields.add(
+        Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(
+                text: '${config.label(field)}: ',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              TextSpan(text: value),
+            ],
+          ),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      );
+    }
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -640,15 +668,8 @@ class _AnimalCard extends StatelessWidget {
                       animal.title,
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
-                    Text(
-                      [
-                        for (final field in configurationFields)
-                          if (config.detailVisible(field, summary: true) &&
-                              !['name', 'status'].contains(field.id) &&
-                              animal.value(field.id).isNotEmpty)
-                            '${config.label(field)}: ${animal.value(field.id)}',
-                      ].join(' · '),
-                    ),
+                    if (summaryFields.isNotEmpty)
+                      Wrap(spacing: 12, runSpacing: 4, children: summaryFields),
                     Text(
                       animal.statusLabel,
                       style: TextStyle(
@@ -659,10 +680,12 @@ class _AnimalCard extends StatelessWidget {
                     ),
                     if (animal.syncState != null)
                       Text(pendingLabel(animal.syncState)),
-                    Text(
-                      weight == null
-                          ? 'Sin pesaje'
-                          : '${_kg(weight.weight)} · ${_date(weight.date)}',
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        Text(_kg(weight?.weight)),
+                        if (weight != null) Text(_date(weight.date)),
+                      ],
                     ),
                   ],
                 ),
