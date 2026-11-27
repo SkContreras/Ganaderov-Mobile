@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/auth_gateway.dart';
+import '../../../core/sync/background_session.dart';
 
 class SupabaseAuthGateway extends AuthGateway {
   SupabaseAuthGateway(this.client,{this.clearCache,this.retainCacheFor}) {
     _lastUserId=client.auth.currentUser?.id;
+    unawaited(_background.update(client.auth.currentSession).catchError((Object _){}));
     _subscription = client.auth.onAuthStateChange.listen((state) {
+      if(!_loggingOut)unawaited(_background.update(state.session).catchError((Object _){}));
       final userId=state.session?.user.id;
       if(userId!=_lastUserId){
         _lastUserId=userId;
@@ -26,6 +29,8 @@ class SupabaseAuthGateway extends AuthGateway {
   final Future<void> Function()? clearCache;
   final Future<void> Function(String)? retainCacheFor;
   String? _lastUserId;
+  final _background=BackgroundSessionPublisher();
+  bool _loggingOut=false;
   static const callback = 'com.ganaderov.mobile://auth/callback';
   late final StreamSubscription<AuthState> _subscription;
   bool _recovering = false;
@@ -68,9 +73,12 @@ class SupabaseAuthGateway extends AuthGateway {
   }
   @override
   Future<void> logout() async {
-    try{await clearCache?.call();}catch(_){}
-    try{await client.auth.signOut(scope: SignOutScope.local);}
-    finally{await clearCache?.call();}
+    _loggingOut=true;
+    try{
+      await _background.update(null);
+      try{await clearCache?.call();}catch(_){}
+      await client.auth.signOut(scope: SignOutScope.local);
+    }finally{_loggingOut=false;await clearCache?.call();}
   }
   @override
   void dispose() {
