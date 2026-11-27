@@ -1,0 +1,2 @@
+# D4 Android
+PhotoCrop stores horizontal and vertical normalized coordinates and zoom. Gallery renders with cover, matching CSS object-position/transform-origin; fullscreen keeps original. Editor preview and reset. Universal queue handles photo.crop and photo.primary with revision, parent and previous primary compare-and-set. Original uploaded bytes are preserved (picker no longer requests resizing); 10 MB and supported MIME restrictions remain. No new SQLite schema. Legacy direct write retained when flag disabled. Backend Web PR 33 required. CI/device verification pending.

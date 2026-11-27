@@ -18,7 +18,7 @@ import '../domain/event_draft.dart';
 import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
-class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalLifecycleWriter, AnimalPhotos, AnimalPhotoRemoval, AnimalEventWriter, JourneyRepository, ExtendedJourneyRepository, OutboxAccess, ConflictAccess, AnalysisPreferences, ForecastWriter {
+class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalLifecycleWriter, AnimalPhotos, AnimalPhotoRemoval, AnimalPhotoFraming, AnimalEventWriter, JourneyRepository, ExtendedJourneyRepository, OutboxAccess, ConflictAccess, AnalysisPreferences, ForecastWriter {
   SupabaseInventoryRepository(this.client,{this.store,this.onSynced,this.eventRpcEnabled=false,this.journeyRpcEnabled=false,this.universalEnabled=false,this.incrementalEnabled=false,this.project=''});
   final bool universalEnabled,incrementalEnabled;
   final String project;
@@ -448,10 +448,24 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     final row=await _photoRow(snapshot,animalId);
     final photos=_photoList(row);
     if(!photos.any((p)=>p['id']==photoId&&p['animalId']==animalId)) throw StateError('Fotografía no encontrada.');
+    if(universalEnabled){
+      final selected=photos.singleWhere((p)=>p['id']==photoId&&p['animalId']==animalId);
+      final prior=photos.where((p)=>p['primary']==true).firstOrNull;
+      await queueOperation(snapshot,'photo.primary',photoId,{'animalId':animalId,'previousPrimaryId':prior?['id']},revision:await _revision(snapshot,'photo',photoId,selected));return;
+    }
     for(final p in photos){p['primary']=p['id']==photoId;}
     await _writePhotos(snapshot,animalId,row,photos);
   }
 
+  @override
+  Future<void> savePhotoCrop(InventorySnapshot snapshot,String animalId,String photoId,PhotoCrop crop)async{
+    if(!crop.valid)throw ArgumentError('Encuadre inválido');
+    final row=await _photoRow(snapshot,animalId),photos=_photoList(row);
+    final selected=photos.where((p)=>p['id']==photoId&&p['animalId']==animalId).firstOrNull;
+    if(selected==null)throw StateError('Fotografía no disponible');
+    if(universalEnabled){await queueOperation(snapshot,'photo.crop',photoId,crop.changes(animalId),revision:await _revision(snapshot,'photo',photoId,selected));return;}
+    selected.addAll(crop.changes(animalId));await _writePhotos(snapshot,animalId,row,photos);
+  }
   @override
   Future<void> removePhoto(InventorySnapshot snapshot,String animalId,String photoId) async {
     final row=await _photoRow(snapshot,animalId);

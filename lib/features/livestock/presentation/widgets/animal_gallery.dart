@@ -25,7 +25,7 @@ class _AnimalGalleryState extends State<AnimalGallery>{
     finally{if(mounted)setState(()=>_busy=false);}
   }
   Future<void> _pick(ImageSource source)=>_run(() async{
-    final file=await _picker.pickImage(source:source,maxWidth:1600,maxHeight:1600,imageQuality:85);
+    final file=await _picker.pickImage(source:source,requestFullMetadata:false);
     if(file==null||!mounted)return;
     if(await file.length()>10*1024*1024)throw StateError('La imagen supera 10 MB.');
     final bytes=await file.readAsBytes();
@@ -33,6 +33,18 @@ class _AnimalGalleryState extends State<AnimalGallery>{
     await widget.repository.addPhoto(widget.snapshot,widget.animal.id,bytes,file.name);
     if(mounted)await widget.onChanged();
   });
+  Future<void> _editCrop(AnimalPhoto photo)async{
+    final repository=widget.repository,snapshot=widget.snapshot,animalId=widget.animal.id;
+    if(repository is! AnimalPhotoFraming||_busy)return;
+    await _run(()async{
+      final bytes=await repository.readPhoto(snapshot,animalId,photo);
+      if(!mounted||widget.snapshot.userId!=snapshot.userId||widget.snapshot.ownerId!=snapshot.ownerId||widget.animal.id!=animalId)return;
+      final crop=await showDialog<PhotoCrop>(context:context,builder:(_)=>_PhotoCropDialog(bytes:bytes,initial:photo.crop));
+      if(crop==null||!mounted||widget.snapshot.userId!=snapshot.userId||widget.snapshot.ownerId!=snapshot.ownerId||widget.animal.id!=animalId)return;
+      await (repository as AnimalPhotoFraming).savePhotoCrop(snapshot,animalId,photo.id,crop);
+      if(mounted)await widget.onChanged();
+    });
+  }
   Future<void> _remove(AnimalPhoto photo)async{
     final repository=widget.repository;
     if(repository is! AnimalPhotoRemoval||_busy)return;
@@ -56,6 +68,10 @@ class _AnimalGalleryState extends State<AnimalGallery>{
           if(widget.snapshot.canManage)IconButton(tooltip:photo.primary?'Foto principal':'Elegir como principal',onPressed:_busy||photo.primary?null:()=>_run(()async{await widget.repository.primaryPhoto(widget.snapshot,widget.animal.id,photo.id);if(mounted)await widget.onChanged();}),icon:Icon(photo.primary?Icons.star:Icons.star_border)),
         ]));
       })),
+      if(widget.snapshot.canManage&&widget.repository is AnimalPhotoFraming&&ordered.isNotEmpty)TextButton.icon(onPressed:_busy?null:()async{
+        final photo=await showDialog<AnimalPhoto>(context:context,builder:(context)=>SimpleDialog(title:const Text('Seleccionar fotografía para encuadrar'),children:[for(final p in ordered)SimpleDialogOption(onPressed:()=>Navigator.pop(context,p),child:Text(p.name))]));
+        if(mounted&&photo!=null)await _editCrop(photo);
+      },icon:const Icon(Icons.crop),label:const Text('Editar encuadre')),
       if(widget.snapshot.canManage&&widget.repository is AnimalPhotoRemoval&&ordered.isNotEmpty)TextButton(onPressed:_busy?null:()async{
         final photo=await showDialog<AnimalPhoto>(context:context,builder:(context)=>SimpleDialog(title:const Text('Seleccionar fotografía para quitar'),children:[for(final p in ordered)SimpleDialogOption(onPressed:()=>Navigator.pop(context,p),child:Text(p.name))]));
         if(mounted&&photo!=null)await _remove(photo);
@@ -87,6 +103,32 @@ class _PrivatePhotoState extends State<_PrivatePhoto>{
   @override Widget build(BuildContext context)=>SizedBox(height:widget.height,width:double.infinity,child:ClipRRect(borderRadius:BorderRadius.circular(12),child:FutureBuilder<Uint8List>(future:_bytes,builder:(context,s){
     if(s.hasError)return Center(child:IconButton(tooltip:'Reintentar fotografía',onPressed:()=>setState(_load),icon:const Icon(Icons.broken_image_outlined)));
     if(!s.hasData)return const Center(child:CircularProgressIndicator());
-    return InkWell(onTap:()=>showDialog<void>(context:context,builder:(context)=>Dialog(child:InteractiveViewer(child:Image.memory(s.data!,fit:BoxFit.contain)))),child:Image.memory(s.data!,fit:BoxFit.cover,cacheWidth:widget.thumbnail?320:1200,errorBuilder:(_,_,_)=>const Center(child:Icon(Icons.broken_image_outlined))));
+    return InkWell(onTap:()=>showDialog<void>(context:context,builder:(context)=>Dialog(child:InteractiveViewer(child:Image.memory(s.data!,fit:BoxFit.contain)))),child:_FramedPhoto(bytes:s.data!,crop:widget.photo.crop,cacheWidth:widget.thumbnail?320:1200));
   })));
+}
+
+class _FramedPhoto extends StatelessWidget{
+ const _FramedPhoto({required this.bytes,required this.crop,this.cacheWidth});
+ final Uint8List bytes;final PhotoCrop crop;final int? cacheWidth;
+ @override Widget build(BuildContext context){
+  final alignment=Alignment(crop.x/50-1,crop.y/50-1);
+  return ClipRect(child:Transform.scale(scale:crop.zoom,alignment:alignment,child:SizedBox.expand(child:Image.memory(bytes,fit:BoxFit.cover,alignment:alignment,cacheWidth:cacheWidth,errorBuilder:(_,_,_)=>const Center(child:Icon(Icons.broken_image_outlined))))));
+ }
+}
+class _PhotoCropDialog extends StatefulWidget{
+ const _PhotoCropDialog({required this.bytes,required this.initial});
+ final Uint8List bytes;final PhotoCrop initial;
+ @override State<_PhotoCropDialog> createState()=>_PhotoCropDialogState();
+}
+class _PhotoCropDialogState extends State<_PhotoCropDialog>{
+ late double x=widget.initial.x,y=widget.initial.y,zoom=widget.initial.zoom;
+ PhotoCrop get crop=>PhotoCrop(x:x,y:y,zoom:zoom);
+ @override Widget build(BuildContext context)=>AlertDialog(title:const Text('Editar encuadre'),content:SizedBox(width:420,child:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
+  SizedBox(height:190,width:double.infinity,child:_FramedPhoto(bytes:widget.bytes,crop:crop,cacheWidth:1200)),
+  Text('Horizontal: ${x.round()}%'),Slider(value:x,min:0,max:100,onChanged:(v)=>setState(()=>x=v)),
+  Text('Vertical: ${y.round()}%'),Slider(value:y,min:0,max:100,onChanged:(v)=>setState(()=>y=v)),
+  Text('Acercamiento: ${zoom.toStringAsFixed(1)}×'),Slider(value:zoom,min:1,max:3,divisions:20,onChanged:(v)=>setState(()=>zoom=v)),
+  TextButton(onPressed:()=>setState((){x=50;y=50;zoom=1;}),child:const Text('Restaurar encuadre')),
+  const Text('El archivo original no se modifica.'),
+ ]))),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text('Cancelar')),FilledButton(onPressed:()=>Navigator.pop(context,crop),child:const Text('Guardar'))]);
 }
