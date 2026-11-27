@@ -15,7 +15,7 @@ import 'features/settings/data/supabase_ranch_repository.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SupabaseConfig.initialize();
-  final store=OfflineStore();
+  final store=await OfflineStore.protected(provision:true);
   final currentUser=Supabase.instance.client.auth.currentUser;
   try{if(currentUser==null){await store.purgeAll();}else{await store.retainOnly(currentUser.id);}}catch(_){}
   final ranch=SupabaseRanchRepository(Supabase.instance.client);
