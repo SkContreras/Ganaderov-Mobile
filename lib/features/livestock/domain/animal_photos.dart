@@ -13,7 +13,7 @@ class AnimalPhoto {
     if(photos is! List) return [];
     return [
       for(final p in photos.whereType<Map>())
-        if(p['id'] is String && p['animalId']==animalId && p['storagePath']=='${snapshot.ownerId}/$animalId/${p['id']}')
+        if(p['id'] is String && (p['animalId']==null||p['animalId']==animalId) && p['storagePath']=='${snapshot.ownerId}/$animalId/${p['id']}')
           AnimalPhoto(id:p['id'] as String,path:p['storagePath'] as String,name:p['name']?.toString()??'Fotografía',primary:p['primary']==true,crop:PhotoCrop.fromJson(p)),
     ];
   }
@@ -45,4 +45,76 @@ class PhotoCrop {
 }
 abstract interface class AnimalPhotoFraming{
  Future<void> savePhotoCrop(InventorySnapshot snapshot,String animalId,String photoId,PhotoCrop crop);
+}
+
+abstract interface class OfflineAnimalPhotos {
+  bool get supportsOfflinePhotoChanges;
+  Future<InventorySnapshot> refreshPhotoChanges(InventorySnapshot snapshot);
+}
+
+/// Replays durable metadata changes for display without modifying the confirmed
+/// snapshot. Calling it repeatedly is safe, including after process restart.
+InventorySnapshot projectPhotoChanges(
+  InventorySnapshot snapshot,
+  List<Map<String, dynamic>> changes,
+) {
+  final records = snapshot.records.map((row) => Map<String, dynamic>.from(row)).toList();
+  final states = <String, String>{};
+  for (final entry in changes) {
+    final operation = entry['operation'];
+    if (operation is! Map || operation['ownerId'] != snapshot.ownerId) continue;
+    final update = operation['changes'];
+    if (update is! Map || update['animalId'] is! String) continue;
+    final animalId = update['animalId'] as String;
+    final state = entry['state'] as String;
+    if (!['pending', 'confirmed', 'conflict', 'rejected'].contains(state)) continue;
+    if(states[animalId]!='conflict'&&states[animalId]!='rejected')states[animalId] = state;
+    if (state != 'pending' && state != 'confirmed') continue;
+    final row = records.where((row) => row['animal_id'] == animalId && row['deleted_at'] == null).firstOrNull;
+    if (row == null || row['payload'] is! Map) continue;
+    final payload = Map<String, dynamic>.from(row['payload'] as Map);
+    final original = payload['photos'];
+    if (original is! List) continue;
+    final photos = original.whereType<Map>().map((p) => Map<String, dynamic>.from(p)).toList();
+    final photoId = operation['entityId'];
+    final selected = photos.where((p) => p['id'] == photoId && (p['animalId'] == null || p['animalId'] == animalId) && p['storagePath'] == '${snapshot.ownerId}/$animalId/$photoId').firstOrNull;
+    switch (operation['action']) {
+      case 'photo.create':
+        if (selected == null) {
+          if (update['primary'] == true) {
+            for (final photo in photos) { photo['primary'] = false; }
+          }
+          photos.add({
+            'id': photoId, 'animalId': animalId,
+            'storagePath': '${snapshot.ownerId}/$animalId/$photoId',
+            'name': update['name'], 'mime': update['mime'],
+            'primary': update['primary'] == true,
+            'createdAt': operation['capturedAt'],
+            'cropX': 50.0, 'cropY': 50.0, 'cropZoom': 1.0,
+          });
+        }
+      case 'photo.crop':
+        if (selected != null) {
+          for (final field in ['cropX', 'cropY', 'cropZoom']) { selected[field] = update[field]; }
+        }
+      case 'photo.primary':
+        if (selected != null) {
+          for (final photo in photos) { photo['primary'] = photo['id'] == photoId; }
+        }
+      case 'photo.delete':
+        photos.removeWhere((photo) => photo['id'] == photoId);
+        if (photos.isNotEmpty && !photos.any((p) => p['primary'] == true)) {
+          photos.first['primary'] = true;
+        }
+    }
+    payload['photos'] = photos;
+    row['payload'] = payload;
+  }
+  return InventorySnapshot(
+    status: snapshot.status, ranchName: snapshot.ranchName, role: snapshot.role,
+    records: records, statusOptions: snapshot.statusOptions, statusLabels: snapshot.statusLabels,
+    config: snapshot.config, ownerId: snapshot.ownerId, userId: snapshot.userId,
+    configRevision: snapshot.configRevision, offline: snapshot.offline,
+    cachedAt: snapshot.cachedAt, photoSyncStates: states,
+  );
 }

@@ -93,4 +93,46 @@ build `release` queda sin firmar y no está listo para publicar.
 flutter test
 flutter analyze
 ```
+
+## D4: encuadre y galería sin conexión
+
+Con `--dart-define=SYNC_UNIVERSAL_V1=true`, abre las fotografías con conexión
+una vez para guardar sus originales y la revisión confirmada de sus metadatos.
+Después, propietarios y administradores pueden ajustar el encuadre, elegir la
+principal o quitar una fotografía sin conexión mientras la sesión y la copia
+local del inventario sigan vigentes. Se conserva el plazo de 24 horas del modo
+sin conexión; una revisión desconocida o vencida requiere volver a abrir la
+fotografía con conexión. Las imágenes antiguas sin `animalId` interno se aceptan
+únicamente cuando su ruta y el padre confirmado corresponden al animal.
+
+Los deslizadores muestran una previsualización y **Guardar** registra una sola
+operación. La previsualización y el estado pendiente se reconstruyen desde la
+cola cifrada después de cerrar y abrir la aplicación. El inventario confirmado
+se guarda por separado y nunca recibe una revisión inventada a partir de esa
+previsualización. Se permite **una operación de fotografía sin resolver por
+animal**: los controles quedan deshabilitados hasta confirmar el cambio o
+resolverlo en **Ajustes → Sincronización**. Esto también se aplica a las fotos
+nuevas pendientes de subir. Un conflicto requiere revisión explícita; no se
+recalcula automáticamente su revisión. La confirmación mantiene la vista local
+hasta completar una descarga del inventario iniciada después del recibo.
+
+Los originales JPEG, PNG y WebP de hasta 10 MiB se conservan sin recortar ni
+recomprimir. Su caché está cifrada y separada por proyecto, cuenta y rancho, con
+un presupuesto global de 50 MiB de contenido cifrado y expulsión de los archivos
+menos utilizados. Las fotografías expulsadas deben abrirse con conexión otra
+vez. Los adjuntos pendientes de subir se conservan en la cola hasta confirmarse;
+se procesan de uno en uno para limitar la memoria. La decodificación para mostrar
+imágenes limita ambos ejes a 320 píxeles en miniaturas, 1200 en la galería/editor
+y 2048 en el visor, sin modificar los bytes originales.
+
+La base local migra a la versión 11. El contrato de operaciones compartido está
+en `contracts/sync/v1/operation.schema.json` y contiene las mismas 20 acciones
+que Web D4. El servidor requiere las migraciones correspondientes del repositorio
+Ganaderov; estos cambios de cliente no instalan SQL ni modifican producción.
+
+Pruebas específicas:
+
+```sh
+flutter test test/photo_store_test.dart test/photo_repository_test.dart test/photo_gallery_test.dart test/photo_crop_test.dart test/animal_photos_test.dart
+```
 # Ganaderov-Mobile

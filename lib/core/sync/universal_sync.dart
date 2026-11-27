@@ -20,13 +20,17 @@ class UniversalSync {
     if(raw is! Map||raw['revision'] is! int)throw const FormatException('Revisión inválida');
     return Map<String,dynamic>.from(raw);
   }
-  Future<String> enqueue(String user,String owner,String action,String id,Map<String,dynamic> changes,{int? revision,String? attachment})async{
+  Future<String> enqueue(String user,String owner,String action,String id,Map<String,dynamic> changes,{int? revision,String? attachment,Map<String,dynamic>? expectedPhoto,void Function()? verifyPhoto})async{
     verify(user);
     if(!universalActions.contains(action)||id.isEmpty||action.endsWith('.create')!=(revision==null))throw ArgumentError('Operación inválida');
     final op=const Uuid().v4();
     final operation=<String,dynamic>{'protocolVersion':1,'operationId':op,'action':action,'entityId':id,'ownerId':owner,'deviceId':await store.installationId(),'baseRevision':revision,'capturedAt':DateTime.now().toUtc().toIso8601String(),'changes':changes};
     verify(user);
-    await store.enqueueUniversal(user,owner,operation,attachment:attachment);
+    if(action.startsWith('photo.')){
+      await store.enqueuePhotoOperation(user,owner,project,operation,expected:expectedPhoto,attachment:attachment,verify:(){verify(user);verifyPhoto?.call();});
+    }else{
+      await store.enqueueUniversal(user,owner,operation,attachment:attachment);
+    }
     return op;
   }
   Future<void> flush(String user,String owner,String holder,{bool manual=false})async{
@@ -37,9 +41,18 @@ class UniversalSync {
       final op=Map<String,dynamic>.from(row['operation'] as Map),id=row['id'] as String;
       try{
         if(op['operationId']!=id||op['ownerId']!=owner||!universalActions.contains(op['action']))throw const FormatException('Ámbito inválido');
+        if((op['action'] as String).startsWith('photo.')){
+          final capturedProject=await store.photoOperationProject(user,owner,id);
+          if(capturedProject==null){
+            await store.settleUniversal(user,owner,id,'rejected',{'protocolVersion':1,'operationId':id,'status':'rejected','code':'LOCAL_PHOTO_PROJECT_UNVERIFIED','serverReceivedAt':DateTime.now().toUtc().toIso8601String()},0);
+            continue;
+          }
+          if(capturedProject!=project)continue;
+        }
         if(op['action']=='photo.create'){
           final c=op['changes'] as Map,path='$owner/${c['animalId']}/${op['entityId']}';
-          final bytes=base64Decode(row['attachment'] as String);
+          // Decode one pending original at a time, not the whole upload queue.
+          final bytes=base64Decode((await store.universalAttachment(user,owner,id))??(throw StateError('Original no disponible')));
           try{await client.storage.from('animal-photos').uploadBinary(path,bytes,fileOptions:FileOptions(contentType:c['mime'] as String,upsert:false)).timeout(const Duration(seconds:20));}
           catch(_){final old=await client.storage.from('animal-photos').download(path).timeout(const Duration(seconds:20));if(base64Encode(old)!=base64Encode(bytes))rethrow;}
         }
