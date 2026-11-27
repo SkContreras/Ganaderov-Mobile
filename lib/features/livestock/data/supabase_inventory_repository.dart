@@ -18,7 +18,7 @@ import '../domain/event_draft.dart';
 import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
-class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalLifecycleWriter, AnimalPhotos, AnimalPhotoRemoval, AnimalEventWriter, JourneyRepository, OutboxAccess, ConflictAccess, AnalysisPreferences {
+class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalLifecycleWriter, AnimalPhotos, AnimalPhotoRemoval, AnimalEventWriter, JourneyRepository, OutboxAccess, ConflictAccess, AnalysisPreferences, ForecastWriter {
   SupabaseInventoryRepository(this.client,{this.store,this.onSynced,this.eventRpcEnabled=false,this.journeyRpcEnabled=false,this.universalEnabled=false,this.incrementalEnabled=false,this.project=''});
   final bool universalEnabled,incrementalEnabled;
   final String project;
@@ -89,6 +89,29 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
   }
   @override Future<void> deleteQuote(InventorySnapshot s,String id)async{
     _quoteScope(s);await store!.changeQuote(s.userId,s.ownerId,project,null,id);
+  }
+  @override bool get forecastWritesEnabled=>universalEnabled;
+  Map<String,dynamic> _forecastPayload(InventorySnapshot s,String animalId){
+    if(!s.canManage||!universalEnabled||s.userId!=client.auth.currentUser?.id)throw StateError('Operación no autorizada');
+    final row=s.records.where((r)=>r['animal_id']==animalId&&r['deleted_at']==null).firstOrNull;
+    if(row==null)throw StateError('Animal no disponible');
+    return Map<String,dynamic>.from(row['payload'] as Map);
+  }
+  @override Future<void> createForecast(InventorySnapshot s,String animalId,String id,ForecastDraft draft)async{
+    _forecastPayload(s,animalId);
+    if(!draft.valid)throw ArgumentError('Pronóstico inválido');
+    await queueOperation(s,'forecast.create',id,draft.changes(animalId));
+  }
+  @override Future<void> deleteForecast(InventorySnapshot s,String animalId,String id)async{
+    final payload=_forecastPayload(s,animalId);
+    final raw=(payload['forecasts'] as List).whereType<Map>().where((f)=>f['id']==id&&f['animalId']==animalId).firstOrNull;
+    if(raw==null)throw StateError('Pronóstico no disponible');
+    await queueOperation(s,'forecast.delete',id,{'animalId':animalId},revision:await _revision(s,'forecast',id,raw));
+  }
+  @override Future<void> setWeightTarget(InventorySnapshot s,String animalId,double? minimum,double? maximum)async{
+    final payload=_forecastPayload(s,animalId);
+    if((minimum==null)!=(maximum==null)||(minimum!=null&&(!minimum.isFinite||!maximum!.isFinite||minimum<0||maximum>100000||minimum>maximum)))throw ArgumentError('Rango inválido');
+    await queueOperation(s,'animal.target.update',animalId,{'minimum':minimum,'maximum':maximum},revision:await _revision(s,'animal',animalId,payload['animal']));
   }
   final bool journeyRpcEnabled;
   @override bool get supportsJourneyResume=>journeyRpcEnabled;

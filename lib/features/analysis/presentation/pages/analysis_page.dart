@@ -17,7 +17,12 @@ class _AnalysisPageState extends State<AnalysisPage>{
   InventorySnapshot? _snapshot;
   List<InventoryAnimal> _animals=[];
   String? _id,_lot;
-  bool _loading=true,_failed=false;
+  bool _loading=true,_failed=false,_savingForecast=false;
+  Future<void> _forecastAction(Future<void> Function() action)async{
+    if(_savingForecast)return;
+    setState(()=>_savingForecast=true);
+    try{await action();if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Operación guardada en la cola. Pendiente de confirmación.')));}catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.toString())));}finally{if(mounted)setState(()=>_savingForecast=false);}
+  }
   int _request=0;
   @override void initState(){super.initState();widget.auth.addListener(_changed);widget.changes.addListener(_changed);_load();}
   @override void dispose(){widget.auth.removeListener(_changed);widget.changes.removeListener(_changed);super.dispose();}
@@ -44,6 +49,8 @@ class _AnalysisPageState extends State<AnalysisPage>{
     final basis=recentGrowth(points);
     final lots=_animals.map((a)=>a.value('lot')).where((v)=>v.isNotEmpty).toSet().toList()..sort();
     final lot=_lot==null?null:summarizeLot(_animals,_lot!);
+    final writer=widget.repository is ForecastWriter?widget.repository as ForecastWriter:null;
+    final canWrite=writer?.forecastWritesEnabled==true&&_snapshot?.canManage==true&&!_savingForecast;
     final forecasts=animal==null||_snapshot==null?<ForecastView>[]:savedForecasts(_snapshot!,animal.id);
     return SafeArea(top:false,child:RefreshIndicator(onRefresh:_load,child:ListView(physics:const AlwaysScrollableScrollPhysics(),padding:const EdgeInsets.all(20),children:[
       Row(children:[Expanded(child:Text('Análisis ganadero',style:Theme.of(context).textTheme.headlineSmall)),IconButton(tooltip:'Actualizar análisis',onPressed:_loading?null:_load,icon:const Icon(Icons.refresh))]),
@@ -70,19 +77,29 @@ class _AnalysisPageState extends State<AnalysisPage>{
           if(basis==null)const Text('No hay dos fechas distintas dentro de los últimos 30 días de pesajes para calcular GMD.')
           else Text('GMD medida: ${basis.gain.toStringAsFixed(3)} kg/día · ${basis.days} días · ${basis.points.length} fechas'),
           if(basis?.variable==true)const Text('Aviso: hubo ganancias y pérdidas entre pesajes.'),
+          if(writer?.forecastWritesEnabled==true&&_snapshot!.canManage)OutlinedButton(onPressed:!canWrite?null:()async{
+            final s=_snapshot!;
+            final result=await showDialog<List<double?>>(context:context,builder:(_)=>_TargetRangeDialog(minimum:double.tryParse(animal.value('targetWeightMin')),maximum:double.tryParse(animal.value('targetWeightMax'))));
+            if(result!=null&&mounted)await _forecastAction(()=>writer!.setWeightTarget(s,animal.id,result[0],result[1]));
+          },child:const Text('Editar rango de peso objetivo')),
           if(forecasts.isNotEmpty)...[
             Text('Pronósticos guardados',style:Theme.of(context).textTheme.titleLarge),
-            for(final f in forecasts.take(10))ListTile(title:Text('${f.predicted.toStringAsFixed(1)} kg · ${f.targetDate}'),subtitle:Text(f.actual==null?'Pendiente de evaluación en servidor':'Real: ${f.actual!.toStringAsFixed(1)} kg · ${f.actualDate} · Error: ${f.error!.toStringAsFixed(2)} kg${f.absolutePercent==null?"":" · ${f.absolutePercent!.toStringAsFixed(1)}%"}')),
+            for(final f in forecasts.take(10))ListTile(title:Text('${f.predicted.toStringAsFixed(1)} kg · ${f.targetDate}'),subtitle:Text(f.actual==null?'Pendiente de evaluación en servidor':'Real: ${f.actual!.toStringAsFixed(1)} kg · ${f.actualDate} · Error: ${f.error!.toStringAsFixed(2)} kg${f.absolutePercent==null?"":" · ${f.absolutePercent!.toStringAsFixed(1)}%"}'),trailing:writer?.forecastWritesEnabled==true&&_snapshot!.canManage?IconButton(tooltip:'Eliminar pronóstico',onPressed:!canWrite?null:()async{
+              final s=_snapshot!;
+              final yes=await showDialog<bool>(context:context,builder:(context)=>AlertDialog(title:const Text('Eliminar pronóstico'),content:const Text('Se conservará el historial de auditoría en el servidor.'),actions:[TextButton(onPressed:()=>Navigator.pop(context,false),child:const Text('Cancelar')),FilledButton(onPressed:()=>Navigator.pop(context,true),child:const Text('Eliminar'))]));
+              if(yes==true&&mounted)await _forecastAction(()=>writer!.deleteForecast(s,animal.id,f.id));
+            },icon:const Icon(Icons.delete_outline)):null),
           ],
         ],
         if(widget.repository is AnalysisPreferences)_QuotePanel(key:ValueKey('quotes-${_snapshot!.userId}-${_snapshot!.ownerId}'),snapshot:_snapshot!,access:widget.repository as AnalysisPreferences,animals:_animals,lot:_lot),
-        _ScenarioTools(key:ValueKey('$_id-$_lot-${lot?.count}-${points.isEmpty?'':points.last.weight}-${basis?.gain}'),initialCount:lot?.count,initialTarget:double.tryParse(animal?.value('targetWeightMin')??''),initialWeight:points.isEmpty?null:points.last.weight,initialGain:basis?.gain,baseDate:points.isEmpty?null:points.last.date),
+        _ScenarioTools(key:ValueKey('$_id-$_lot-${lot?.count}-${points.isEmpty?'':points.last.weight}-${basis?.gain}'),initialCount:lot?.count,initialTarget:double.tryParse(animal?.value('targetWeightMin')??''),initialWeight:points.isEmpty?null:points.last.weight,initialGain:basis?.gain,baseDate:points.isEmpty?null:points.last.date,onSave:canWrite&&animal!=null?(id,draft)=>_forecastAction(()=>writer!.createForecast(_snapshot!,animal.id,id,draft)):null),
       ],
     ])));
   }
 }
 class _ScenarioTools extends StatefulWidget{
-  const _ScenarioTools({super.key,this.initialWeight,this.initialGain,this.baseDate,this.initialCount,this.initialTarget});
+  const _ScenarioTools({super.key,this.initialWeight,this.initialGain,this.baseDate,this.initialCount,this.initialTarget,this.onSave});
+  final Future<void> Function(String,ForecastDraft)? onSave;
   final double? initialWeight,initialGain,initialTarget;
   final int? initialCount;
   final DateTime? baseDate;
@@ -91,6 +108,7 @@ class _ScenarioTools extends StatefulWidget{
 class _ScenarioToolsState extends State<_ScenarioTools>{
   late final _weight=TextEditingController(text:widget.initialWeight?.toStringAsFixed(1)??'');
   late final _gain=TextEditingController(text:widget.initialGain?.toStringAsFixed(3)??'');
+  String? _submitted;
   final _days=TextEditingController(text:'30'),_price=TextEditingController(),_future=TextEditingController(),_cost=TextEditingController(),_ration=TextEditingController(),_feedPrice=TextEditingController();
   late final _target=TextEditingController(text:widget.initialTarget?.toString()??''),_count=TextEditingController(text:(widget.initialCount??1).toString());
   @override void dispose(){for(final c in [_weight,_gain,_days,_price,_future,_cost,_target,_count,_ration,_feedPrice]){c.dispose();}super.dispose();}
@@ -110,6 +128,12 @@ class _ScenarioToolsState extends State<_ScenarioTools>{
       Text(widget.baseDate==null?'Escenario manual: los valores no son mediciones.':'Fecha base: ${DateFormat('dd/MM/yyyy').format(widget.baseDate!)}. Si editas la GMD, será un supuesto.'),
       _field('Peso base (kg)',_weight),_field('GMD (kg/día)',_gain),_field('Plazo (días)',_days),
       if(valid)Card(child:Padding(padding:const EdgeInsets.all(16),child:Text('Peso proyectado: ${(w+g*d).toStringAsFixed(1)} kg\nFecha objetivo: ${DateFormat('dd/MM/yyyy').format((widget.baseDate??DateTime.now()).add(Duration(days:d)))}'))),
+      if(valid&&d>0&&widget.onSave!=null)OutlinedButton(onPressed:_submitted=='$w/$g/$d'?null:()async{
+        final draft=ForecastDraft(baselineWeight:w,gain:g,days:d,baselineDate:widget.baseDate??DateTime.now());
+        if(!draft.valid)return;
+        setState(()=>_submitted='$w/$g/$d');
+        await widget.onSave!(const Uuid().v4(),draft);
+      },child:const Text('Guardar pronóstico en expediente')),
       const SizedBox(height:20),
       Text('Peso objetivo',style:Theme.of(context).textTheme.titleLarge),
       _field('Peso objetivo (kg)',_target),
@@ -238,5 +262,27 @@ class _QuoteDialogState extends State<_QuoteDialog>{
  ])),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text('Cancelar')),FilledButton(onPressed:(){
   final q=PriceQuote(id:const Uuid().v4(),category:_category.text.trim(),date:DateFormat('yyyy-MM-dd').format(_date),minimum:n(_min)??double.nan,average:n(_avg)??double.nan,maximum:n(_max)??double.nan,nextThreshold:_threshold.text.trim().isEmpty?null:n(_threshold)??double.nan,nextAverage:_next.text.trim().isEmpty?null:n(_next)??double.nan);
   if(!q.valid){setState(()=>_error='Comprueba categoría, rango y siguiente precio.');return;}Navigator.pop(context,q);
+ },child:const Text('Guardar'))]);
+}
+
+class _TargetRangeDialog extends StatefulWidget{
+ const _TargetRangeDialog({this.minimum,this.maximum});
+ final double? minimum,maximum;
+ @override State<_TargetRangeDialog> createState()=>_TargetRangeDialogState();
+}
+class _TargetRangeDialogState extends State<_TargetRangeDialog>{
+ late final _min=TextEditingController(text:widget.minimum?.toString()??''),_max=TextEditingController(text:widget.maximum?.toString()??'');
+ String? _error;
+ @override void dispose(){_min.dispose();_max.dispose();super.dispose();}
+ @override Widget build(BuildContext context)=>AlertDialog(title:const Text('Rango de peso objetivo'),content:Column(mainAxisSize:MainAxisSize.min,children:[
+  TextField(controller:_min,keyboardType:const TextInputType.numberWithOptions(decimal:true),decoration:const InputDecoration(labelText:'Mínimo (kg)')),
+  TextField(controller:_max,keyboardType:const TextInputType.numberWithOptions(decimal:true),decoration:const InputDecoration(labelText:'Máximo (kg)')),
+  const Text('Deja ambos campos vacíos para quitar el objetivo.'),
+  if(_error!=null)Text(_error!),
+ ]),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text('Cancelar')),FilledButton(onPressed:(){
+  if(_min.text.trim().isEmpty&&_max.text.trim().isEmpty){Navigator.pop(context,<double?>[null,null]);return;}
+  final lo=double.tryParse(_min.text.replaceAll(',','.')),hi=double.tryParse(_max.text.replaceAll(',','.'));
+  if(lo==null||hi==null||!lo.isFinite||!hi.isFinite||lo<0||hi>100000||lo>hi){setState(()=>_error='Rango inválido');return;}
+  Navigator.pop(context,<double?>[lo,hi]);
  },child:const Text('Guardar'))]);
 }
