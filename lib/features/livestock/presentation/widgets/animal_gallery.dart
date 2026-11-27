@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'package:flutter/services.dart';
 
 import 'package:material_ui/material_ui.dart';
 import 'package:image_picker/image_picker.dart';
@@ -7,6 +8,52 @@ import '../../domain/inventory.dart';
 import '../../domain/animal_photos.dart';
 import 'framed_photo.dart';
 import 'photo_crop_editor.dart';
+
+/// Opens the native Android share sheet with the original private photo.
+Future<void> shareAnimalPhoto({
+  required BuildContext context,
+  required InventorySnapshot snapshot,
+  required InventoryAnimal animal,
+  required AnimalPhotos repository,
+  required bool Function() isCurrent,
+}) async {
+  if (!isCurrent() || snapshot.status != 'active') return;
+  final photos = AnimalPhoto.fromSnapshot(snapshot, animal.id);
+  final ordered = [
+    ...photos.where((p) => p.primary),
+    ...photos.where((p) => !p.primary),
+  ];
+  if (ordered.isEmpty) return;
+  final photo = await showDialog<AnimalPhoto>(
+    context: context,
+    builder: (_) => _PhotoSelectionDialog(
+      title: 'Compartir fotografía',
+      subtitle: 'Elige el original de ${animal.title}. La imagen puede incluir metadatos de la cámara.',
+      photos: ordered,
+      snapshot: snapshot,
+      animalId: animal.id,
+      repository: repository,
+    ),
+  );
+  if (photo == null || !context.mounted || !isCurrent()) return;
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    final bytes = await repository.readPhoto(snapshot, animal.id, photo);
+    if (!context.mounted || !isCurrent()) return;
+    final mime = imageMime(bytes);
+    if (mime == null || bytes.length > 10 * 1024 * 1024) {
+      throw StateError('Formato de fotografía no compatible.');
+    }
+    await const MethodChannel('com.ganaderov.mobile/photo_share')
+        .invokeMethod<void>('sharePhoto', {'bytes': bytes, 'mime': mime});
+  } catch (_) {
+    if (context.mounted && isCurrent()) {
+      messenger.showSnackBar(SnackBar(content: Text(snapshot.offline
+          ? 'No se pudo compartir. Comprueba que la foto esté guardada en el dispositivo.'
+          : 'No se pudo compartir la fotografía. Inténtalo de nuevo.')));
+    }
+  }
+}
 
 class AnimalGallery extends StatefulWidget {
   const AnimalGallery({
@@ -172,6 +219,8 @@ class _AnimalGalleryState extends State<AnimalGallery> {
             ['owner', 'admin'].contains(widget.snapshot.role));
     final syncState = widget.snapshot.photoSyncStates[widget.animal.id];
     final locked = _busy || syncState != null;
+    final scope = widget.snapshot;
+    final animalId = widget.animal.id;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -214,6 +263,20 @@ class _AnimalGalleryState extends State<AnimalGallery> {
               repository: widget.repository,
               height: 190,
             ),
+          ),
+        if (ordered.isNotEmpty && scope.status == 'active')
+          OutlinedButton.icon(
+            onPressed: _busy ? null : () => _run(() => shareAnimalPhoto(
+              context: context,
+              snapshot: scope,
+              animal: widget.animal,
+              repository: widget.repository,
+              isCurrent: () => mounted &&
+                  identical(widget.snapshot, scope) &&
+                  widget.animal.id == animalId,
+            )),
+            icon: const Icon(Icons.share_outlined),
+            label: const Text('Compartir fotografía'),
           ),
         if (ordered.isNotEmpty) const SizedBox(height: 8),
         if (ordered.isNotEmpty)

@@ -47,6 +47,28 @@ class _LivestockPageState extends State<LivestockPage> {
   List<InventoryAnimal> _animals = [];
   String? _selectedId;
   bool _archived = false, _loading = true, _failed = false;
+  bool _sharingPhoto = false;
+
+  Future<void> _sharePhoto(InventoryAnimal animal) async {
+    final snapshot = _snapshot;
+    final repository = widget.repository;
+    if (_sharingPhoto || snapshot == null || repository is! AnimalPhotos) return;
+    setState(() => _sharingPhoto = true);
+    final request = _request;
+    try {
+      await shareAnimalPhoto(
+        context: context,
+        snapshot: snapshot,
+        animal: animal,
+        repository: repository as AnimalPhotos,
+        isCurrent: () => mounted && request == _request &&
+            identical(_snapshot, snapshot) && widget.auth.signedIn &&
+            !widget.auth.recovering,
+      );
+    } finally {
+      if (mounted) setState(() => _sharingPhoto = false);
+    }
+  }
   int _request = 0;
   @override
   void initState() {
@@ -597,6 +619,11 @@ class _LivestockPageState extends State<LivestockPage> {
                       animal: animal,
                       config: AnimalFormConfig(_snapshot!.config),
                       onTap: () => setState(() => _selectedId = animal.id),
+                      onShare: !_sharingPhoto &&
+                              widget.repository is AnimalPhotos &&
+                              AnimalPhoto.fromSnapshot(_snapshot!, animal.id).isNotEmpty
+                          ? () => _sharePhoto(animal)
+                          : null,
                     );
                   }, childCount: filtered.length),
                 ),
@@ -619,9 +646,11 @@ class _AnimalCard extends StatelessWidget {
     required this.animal,
     required this.onTap,
     required this.config,
+    this.onShare,
   });
   final InventoryAnimal animal;
   final VoidCallback onTap;
+  final VoidCallback? onShare;
   final AnimalFormConfig config;
   static const _summaryFieldIds = {'tag', 'sex', 'color'};
 
@@ -703,6 +732,12 @@ class _AnimalCard extends StatelessWidget {
                   ],
                 ),
               ),
+              if (onShare != null)
+                IconButton(
+                  tooltip: 'Compartir fotografía de ${animal.title}',
+                  icon: const Icon(Icons.share_outlined),
+                  onPressed: onShare,
+                ),
               const Icon(Icons.chevron_right),
             ],
           ),
