@@ -7,6 +7,8 @@ import 'package:ganaderov/features/livestock/domain/animal_photos.dart';
 import 'package:ganaderov/features/livestock/domain/inventory.dart';
 import 'package:ganaderov/features/livestock/presentation/pages/livestock_page.dart';
 import 'package:ganaderov/features/livestock/presentation/widgets/animal_gallery.dart';
+import 'package:ganaderov/features/livestock/presentation/widgets/framed_photo.dart';
+import 'package:ganaderov/features/livestock/presentation/widgets/photo_crop_editor.dart';
 
 import 'photo_test_fixtures.dart';
 
@@ -19,6 +21,7 @@ class PhotoGalleryRepository
         OfflineAnimalPhotos {
   final original = photoSnapshot(offline: true);
   final operations = <Map<String, dynamic>>[];
+  InventorySnapshot? savedSnapshot;
   int loads = 0;
   @override
   bool get supportsOfflinePhotoChanges => true;
@@ -52,6 +55,7 @@ class PhotoGalleryRepository
     String photoId,
     PhotoCrop crop,
   ) async {
+    savedSnapshot = snapshot;
     operations.add({
       'state': 'pending',
       'operation': {
@@ -136,13 +140,97 @@ void main() {
     return repository;
   }
 
-  Future<void> openCrop(WidgetTester tester) async {
+  Future<void> openCrop(
+    WidgetTester tester, {
+    VoidCallback? beforeSelection,
+  }) async {
+    final heroSize = tester.getSize(
+      find.byKey(const ValueKey('hero-$firstPhoto')),
+    );
     await tester.tap(find.text('Editar encuadre'));
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('select-photo-$firstPhoto')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('select-photo-$secondPhoto')),
+      findsOneWidget,
+    );
+    expect(find.text('Foto principal'), findsOneWidget);
+    beforeSelection?.call();
+    await tester.pump();
     await tester.tap(find.text('Original uno'));
     // The gallery intentionally remains busy while its crop dialog is open.
     await tester.pump();
+    final editor = tester.widget<PhotoCropEditor>(find.byType(PhotoCropEditor));
+    await tester.runAsync(
+      () => precacheImage(
+        boundedPhoto(editor.bytes, 1200),
+        tester.element(find.byType(PhotoCropEditor)),
+      ),
+    );
     await tester.pump(const Duration(milliseconds: 350));
+    final frameSize = tester.getSize(
+      find.byKey(const ValueKey('photo-crop-viewport')),
+    );
+    expect(frameSize.aspectRatio, closeTo(heroSize.aspectRatio, 0.000001));
+  }
+
+  for (final refreshDuringSelection in [false, true]) {
+    testWidgets(
+      'a gallery refresh keeps the original snapshot for the repository guard (during selection: $refreshDuringSelection)',
+      (tester) async {
+        tester.view.physicalSize = const Size(430, 850);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final repository = PhotoGalleryRepository();
+        final opened = repository.original;
+        final current = ValueNotifier(opened);
+        addTearDown(current.dispose);
+        final refreshed = photoSnapshot(offline: true);
+        final photos =
+            (refreshed.records.single['payload'] as Map)['photos'] as List;
+        (photos.first as Map)['cropX'] = 90;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SingleChildScrollView(
+                child: ValueListenableBuilder<InventorySnapshot>(
+                  valueListenable: current,
+                  builder: (context, snapshot, _) => AnimalGallery(
+                    snapshot: snapshot,
+                    animal: snapshot.animals.single,
+                    repository: repository,
+                    onChanged: () async {},
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await openCrop(
+          tester,
+          beforeSelection: refreshDuringSelection
+              ? () => current.value = refreshed
+              : null,
+        );
+        await tester.tap(find.byTooltip('Acercar fotografía'));
+        await tester.pump();
+        if (!refreshDuringSelection) current.value = refreshed;
+        await tester.pump();
+        await tester.tap(find.text('Guardar'));
+        await tester.pumpAndSettle();
+        expect(repository.savedSnapshot, same(opened));
+        expect(
+          AnimalPhoto.fromSnapshot(repository.savedSnapshot!, 'a').first.crop.x,
+          50,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
   }
 
   testWidgets(
@@ -153,17 +241,40 @@ void main() {
       expect(find.text('Editar encuadre'), findsOneWidget);
       expect(find.text('Cámara'), findsNothing);
       await openCrop(tester);
-      tester.widget<Slider>(find.byType(Slider).first).onChanged!(82);
-      tester.widget<Slider>(find.byType(Slider).at(2)).onChanged!(2.4);
+      expect(find.byType(Slider), findsNothing);
+      await tester.tap(find.byTooltip('Acercar fotografía'));
+      await tester.pump();
+      await tester.tap(find.byTooltip('Acercar fotografía'));
+      await tester.pump();
+      await tester.drag(
+        find.byKey(const ValueKey('photo-crop-viewport')),
+        const Offset(-40, 24),
+      );
       await tester.pump();
       expect(repository.operations, isEmpty);
-      expect(find.text('Horizontal: 82%'), findsOneWidget);
+      final preview = tester
+          .widget<FramedPhoto>(
+            find.descendant(
+              of: find.byType(PhotoCropEditor),
+              matching: find.byType(FramedPhoto),
+            ),
+          )
+          .crop;
+      expect(preview.zoom, closeTo(1.4, 0.000001));
+      expect(preview.x, greaterThan(50));
       await tester.tap(find.text('Guardar'));
       await tester.pumpAndSettle();
       expect(repository.operations, hasLength(1));
       expect(repository.loads, 1);
       final gallery = tester.widget<AnimalGallery>(find.byType(AnimalGallery));
-      expect(AnimalPhoto.fromSnapshot(gallery.snapshot, 'a').first.crop.x, 82);
+      expect(
+        AnimalPhoto.fromSnapshot(gallery.snapshot, 'a').first.crop.x,
+        preview.x,
+      );
+      expect(
+        (repository.operations.single['operation'] as Map)['changes'],
+        preview.changes('a'),
+      );
       expect(find.byKey(const ValueKey('photo-sync-state')), findsOneWidget);
       expect(
         tester
@@ -190,7 +301,12 @@ void main() {
     (tester) async {
       final repository = await page(tester);
       await openCrop(tester);
-      tester.widget<Slider>(find.byType(Slider).first).onChanged!(10);
+      await tester.tap(find.byTooltip('Acercar fotografía'));
+      await tester.pump();
+      await tester.drag(
+        find.byKey(const ValueKey('photo-crop-viewport')),
+        const Offset(30, -20),
+      );
       await tester.pump();
       await tester.tap(find.text('Cancelar'));
       await tester.pumpAndSettle();

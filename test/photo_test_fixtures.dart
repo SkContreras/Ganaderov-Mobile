@@ -81,5 +81,5 @@ Map<String, dynamic> photoOperation({
 
 // Valid one-pixel PNG. These are the original bytes, never a cropped derivative.
 Uint8List photoPng() => base64Decode(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH1cAAAAASUVORK5CYII=',
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=',
 );
