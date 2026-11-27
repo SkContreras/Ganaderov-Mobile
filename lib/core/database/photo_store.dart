@@ -7,17 +7,15 @@ extension PhotoStore on OfflineStore {
   static const originalCacheBudget = 50 * 1024 * 1024;
 
   Future<void> _createPhotoCache() async {
+    await _addColumnIfMissing('inventory_cache', 'project', 'TEXT');
     await customStatement(
-      'ALTER TABLE inventory_cache ADD COLUMN project TEXT',
+      'CREATE TABLE IF NOT EXISTS photo_metadata (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,photo_id TEXT NOT NULL,saved_at INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project,photo_id))',
     );
     await customStatement(
-      'CREATE TABLE photo_metadata (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,photo_id TEXT NOT NULL,saved_at INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project,photo_id))',
+      'CREATE TABLE IF NOT EXISTS photo_originals (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,path TEXT NOT NULL,accessed_at INTEGER NOT NULL,byte_length INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project,path))',
     );
     await customStatement(
-      'CREATE TABLE photo_originals (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,path TEXT NOT NULL,accessed_at INTEGER NOT NULL,byte_length INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project,path))',
-    );
-    await customStatement(
-      'CREATE TABLE photo_local_changes (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,animal_id TEXT NOT NULL,operation_id TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project,operation_id))',
+      'CREATE TABLE IF NOT EXISTS photo_local_changes (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,animal_id TEXT NOT NULL,operation_id TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project,operation_id))',
     );
   }
 

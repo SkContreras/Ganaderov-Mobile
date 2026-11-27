@@ -56,7 +56,7 @@ class OfflineStore extends GeneratedDatabase {
   @override Iterable<TableInfo<Table,Object?>> get allTables=>const [];
   @override List<DatabaseSchemaEntity> get allSchemaEntities=>const [];
   @override MigrationStrategy get migration=>MigrationStrategy(onCreate:(_)async{
-    await customStatement('CREATE TABLE inventory_cache (user_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, saved_at INTEGER NOT NULL, payload TEXT NOT NULL)');
+    await customStatement('CREATE TABLE IF NOT EXISTS inventory_cache (user_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, saved_at INTEGER NOT NULL, payload TEXT NOT NULL)');
     await _createOutbox();
     await _upgradeProtocol();
     await _createDeliveryLease();
@@ -69,10 +69,10 @@ class OfflineStore extends GeneratedDatabase {
     await _protectExisting();
   },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<6)await _protectExisting();if(from<7)await _createUniversal();if(from<8)await _upgradeConflictReview();if(from<9)await _createAnalysisPreferences();if(from<10)await _createJourneyCache();if(from<11)await _createPhotoCache();if(from<12)await _createUniversalDrafts();});
   Future<void> _createUniversal()async{
-    await customStatement('CREATE TABLE universal_outbox (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,operation_id TEXT NOT NULL,payload TEXT NOT NULL,attachment TEXT,state TEXT NOT NULL DEFAULT \'pending\',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,receipt TEXT,PRIMARY KEY(user_id,owner_id,operation_id))');
-    await customStatement('CREATE TABLE incremental_mirror (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
+    await customStatement('CREATE TABLE IF NOT EXISTS universal_outbox (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,operation_id TEXT NOT NULL,payload TEXT NOT NULL,attachment TEXT,state TEXT NOT NULL DEFAULT \'pending\',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,receipt TEXT,PRIMARY KEY(user_id,owner_id,operation_id))');
+    await customStatement('CREATE TABLE IF NOT EXISTS incremental_mirror (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
   }
-  Future<void> _createJourneyCache()=>customStatement('CREATE TABLE journey_cache (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,saved_at INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
+  Future<void> _createJourneyCache()=>customStatement('CREATE TABLE IF NOT EXISTS journey_cache (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,saved_at INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
   Future<void> saveJourneyCache(String user,String owner,String project,List<Map<String,dynamic>> rows)=>customStatement('INSERT INTO journey_cache(user_id,owner_id,project,saved_at,payload) VALUES(?,?,?,?,?) ON CONFLICT(user_id,owner_id,project) DO UPDATE SET saved_at=excluded.saved_at,payload=excluded.payload',[user,owner,project,DateTime.now().millisecondsSinceEpoch,_seal(jsonEncode(rows),['journeys',user,owner,project])]);
   Future<List<Map<String,dynamic>>> readJourneyCache(String user,String owner,String project)async{
     final row=await customSelect('SELECT saved_at,payload FROM journey_cache WHERE user_id=? AND owner_id=? AND project=?',variables:[Variable.withString(user),Variable.withString(owner),Variable.withString(project)]).getSingleOrNull();
@@ -81,7 +81,7 @@ class OfflineStore extends GeneratedDatabase {
     if(age<0||age>86400000)return [];
     return (jsonDecode(_open(row.read<String>('payload'),['journeys',user,owner,project])) as List).map((e)=>Map<String,dynamic>.from(e as Map)).toList();
   }
-  Future<void> _createAnalysisPreferences()=>customStatement('CREATE TABLE analysis_preferences (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
+  Future<void> _createAnalysisPreferences()=>customStatement('CREATE TABLE IF NOT EXISTS analysis_preferences (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
   Future<List<Map<String,dynamic>>> readQuotes(String user,String owner,String project)async{
     final row=await customSelect('SELECT payload FROM analysis_preferences WHERE user_id=? AND owner_id=? AND project=?',variables:[Variable.withString(user),Variable.withString(owner),Variable.withString(project)]).getSingleOrNull();
     if(row==null)return [];
@@ -94,10 +94,15 @@ class OfflineStore extends GeneratedDatabase {
     await customStatement('INSERT INTO analysis_preferences(user_id,owner_id,project,payload) VALUES(?,?,?,?) ON CONFLICT(user_id,owner_id,project) DO UPDATE SET payload=excluded.payload',[user,owner,project,_seal(jsonEncode(rows.take(100).toList()),['quotes',user,owner,project])]);
   });
   Future<void> _upgradeConflictReview()async{
-    await customStatement('ALTER TABLE universal_outbox ADD COLUMN archived_from TEXT');
-    await customStatement('ALTER TABLE universal_outbox ADD COLUMN resolved_by TEXT');
-    await customStatement('ALTER TABLE universal_outbox ADD COLUMN resolves TEXT');
-    await customStatement('ALTER TABLE event_outbox ADD COLUMN archived_from TEXT');
+    await _addColumnIfMissing('universal_outbox','archived_from','TEXT');
+    await _addColumnIfMissing('universal_outbox','resolved_by','TEXT');
+    await _addColumnIfMissing('universal_outbox','resolves','TEXT');
+    await _addColumnIfMissing('event_outbox','archived_from','TEXT');
+  }
+  Future<void> _addColumnIfMissing(String table,String column,String definition)async{
+    final columns=await customSelect('PRAGMA table_info("$table")').get();
+    if(columns.any((row)=>row.read<String>('name')==column))return;
+    await customStatement('ALTER TABLE "$table" ADD COLUMN "$column" $definition');
   }
   Future<List<Map<String,dynamic>>> reviewUniversal(String user,String owner)async{
     final rows=await customSelect("SELECT operation_id,payload,state,receipt,archived_from,resolved_by,resolves FROM universal_outbox WHERE user_id=? AND owner_id=? AND state IN ('conflict','rejected','archived','pending') ORDER BY rowid DESC LIMIT 200",variables:[Variable.withString(user),Variable.withString(owner)]).get();
@@ -195,7 +200,7 @@ class OfflineStore extends GeneratedDatabase {
       }
     });
   }
-  Future<void> _createDeliveryLease()=>customStatement('CREATE TABLE sync_delivery_lease (id INTEGER PRIMARY KEY CHECK(id=1), holder TEXT NOT NULL, expires_at INTEGER NOT NULL)');
+  Future<void> _createDeliveryLease()=>customStatement('CREATE TABLE IF NOT EXISTS sync_delivery_lease (id INTEGER PRIMARY KEY CHECK(id=1), holder TEXT NOT NULL, expires_at INTEGER NOT NULL)');
   // All RPC senders share this lease. Expiry allows recovery after process death.
   Future<bool> acquireDeliveryLease(String holder,int now) => transaction(()async{
     await customStatement('INSERT INTO sync_delivery_lease(id,holder,expires_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET holder=excluded.holder,expires_at=excluded.expires_at WHERE sync_delivery_lease.expires_at<=? OR sync_delivery_lease.holder=excluded.holder',[holder,now+60000,now]);
@@ -204,16 +209,16 @@ class OfflineStore extends GeneratedDatabase {
   });
   Future<void> releaseDeliveryLease(String holder)=>customStatement('DELETE FROM sync_delivery_lease WHERE id=1 AND holder=?',[holder]);
   Future<void> _upgradeProtocol()async{
-    await customStatement("ALTER TABLE event_outbox ADD COLUMN operation TEXT");
-    await customStatement("ALTER TABLE event_outbox ADD COLUMN state TEXT NOT NULL DEFAULT 'pending'");
-    await customStatement("ALTER TABLE event_outbox ADD COLUMN receipt TEXT");
-    await customStatement('CREATE TABLE sync_installation (id INTEGER PRIMARY KEY CHECK(id=1), device_id TEXT NOT NULL)');
+    await _addColumnIfMissing('event_outbox','operation','TEXT');
+    await _addColumnIfMissing('event_outbox','state',"TEXT NOT NULL DEFAULT 'pending'");
+    await _addColumnIfMissing('event_outbox','receipt','TEXT');
+    await customStatement('CREATE TABLE IF NOT EXISTS sync_installation (id INTEGER PRIMARY KEY CHECK(id=1), device_id TEXT NOT NULL)');
   }
   Future<String> _deviceId()async{
     await customStatement('INSERT OR IGNORE INTO sync_installation(id,device_id) VALUES(1,?)',[const Uuid().v4()]);
     return (await customSelect('SELECT device_id FROM sync_installation WHERE id=1').getSingle()).read<String>('device_id');
   }
-  Future<void> _createOutbox()=>customStatement('CREATE TABLE event_outbox (user_id TEXT NOT NULL, owner_id TEXT NOT NULL, event_id TEXT NOT NULL, animal_id TEXT NOT NULL, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT \'\', PRIMARY KEY(user_id,owner_id,event_id))');
+  Future<void> _createOutbox()=>customStatement('CREATE TABLE IF NOT EXISTS event_outbox (user_id TEXT NOT NULL, owner_id TEXT NOT NULL, event_id TEXT NOT NULL, animal_id TEXT NOT NULL, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT \'\', PRIMARY KEY(user_id,owner_id,event_id))');
   Future<void> save(InventorySnapshot s,{String? project})async{
     if(s.status!='active'||s.userId.isEmpty||s.ownerId.isEmpty||s.offline)throw StateError('Instantánea no válida');
     final json=jsonEncode({'ranchName':s.ranchName,'role':s.role,'records':s.records,'statusOptions':s.statusOptions,'statusLabels':s.statusLabels,'config':s.config,'configRevision':s.configRevision});

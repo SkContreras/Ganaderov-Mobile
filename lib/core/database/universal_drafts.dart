@@ -5,10 +5,10 @@ part of 'offline_store.dart';
 extension UniversalDraftStore on OfflineStore {
   Future<void> _createUniversalDrafts() async {
     await customStatement(
-      'CREATE TABLE universal_drafts (user_id TEXT NOT NULL, owner_id TEXT NOT NULL, project TEXT NOT NULL, operation_id TEXT NOT NULL, payload TEXT NOT NULL, state TEXT NOT NULL DEFAULT \'waiting\', visible INTEGER NOT NULL DEFAULT 1, error TEXT, PRIMARY KEY(user_id,owner_id,operation_id))',
+      'CREATE TABLE IF NOT EXISTS universal_drafts (user_id TEXT NOT NULL, owner_id TEXT NOT NULL, project TEXT NOT NULL, operation_id TEXT NOT NULL, payload TEXT NOT NULL, state TEXT NOT NULL DEFAULT \'waiting\', visible INTEGER NOT NULL DEFAULT 1, error TEXT, PRIMARY KEY(user_id,owner_id,operation_id))',
     );
     await customStatement(
-      'CREATE TABLE entity_revisions (user_id TEXT NOT NULL, owner_id TEXT NOT NULL, project TEXT NOT NULL, kind TEXT NOT NULL, entity_id TEXT NOT NULL, saved_at INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(user_id,owner_id,project,kind,entity_id))',
+      'CREATE TABLE IF NOT EXISTS entity_revisions (user_id TEXT NOT NULL, owner_id TEXT NOT NULL, project TEXT NOT NULL, kind TEXT NOT NULL, entity_id TEXT NOT NULL, saved_at INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(user_id,owner_id,project,kind,entity_id))',
     );
   }
 

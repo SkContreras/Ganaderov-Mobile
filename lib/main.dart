@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'core/sync/background_sync.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -7,7 +7,6 @@ import 'app.dart';
 import 'core/sync/event_outbox.dart';
 import 'core/database/offline_store.dart';
 import 'core/config/supabase_config.dart';
-import 'core/theme/app_theme.dart';
 import 'features/auth/data/supabase_auth_gateway.dart';
 import 'features/dashboard/data/supabase_dashboard_repository.dart';
 import 'features/livestock/data/supabase_inventory_repository.dart';
@@ -100,7 +99,7 @@ class _StartupAppState extends State<_StartupApp> {
           if (snapshot.hasError) {
             return MaterialApp(
               title: 'Ganaderov',
-              theme: AppTheme.light,
+              theme: ThemeData.light(),
               home: Scaffold(
                 body: SafeArea(
                   child: Center(
@@ -113,7 +112,7 @@ class _StartupAppState extends State<_StartupApp> {
                           const SizedBox(height: 16),
                           Text(
                             'No se pudo iniciar Ganaderov',
-                            style: AppTheme.light.textTheme.titleLarge,
+                            style: ThemeData.light().textTheme.titleLarge,
                             textAlign: TextAlign.center,
                           ),
                           const SizedBox(height: 8),
@@ -145,7 +144,7 @@ class _StartupAppState extends State<_StartupApp> {
           if (!snapshot.hasData) {
             return MaterialApp(
               title: 'Ganaderov',
-              theme: AppTheme.light,
+              theme: ThemeData.light(),
               home: const Scaffold(
                 body: Center(
                   child: Column(
