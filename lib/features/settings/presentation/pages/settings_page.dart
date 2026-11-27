@@ -4,6 +4,9 @@ import '../widgets/sync_panel.dart';
 import '../../../auth/domain/auth_gateway.dart';
 import '../../domain/ranch.dart';
 import '../widgets/ranch_panel.dart';
+import '../../domain/animal_configuration.dart';
+import '../../../livestock/domain/inventory.dart';
+import 'animal_configuration_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.auth, required this.ranchRepository,this.outbox});
@@ -50,6 +53,7 @@ class _SettingsPageState extends State<SettingsPage> {
       ))),
       const SizedBox(height: 12),
       RanchPanel(repository: widget.ranchRepository, auth: widget.auth),
+      if(widget.outbox is RanchConfigurationWriter&&widget.outbox is InventoryRepository&&(widget.outbox as RanchConfigurationWriter).supportsConfiguration)Card(child:ListTile(leading:const Icon(Icons.tune),title:const Text('Campos y listas del rancho'),subtitle:const Text('Módulos, campos, etiquetas y opciones compartidas'),trailing:const Icon(Icons.chevron_right),onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>AnimalConfigurationPage(inventory:widget.outbox as InventoryRepository,writer:widget.outbox as RanchConfigurationWriter))))),
       const SizedBox(height: 12),
       const Card(child: Column(children: [
         ListTile(leading: Icon(Icons.tune), title: Text('Preferencias productivas'), subtitle: Text('Próximamente')),

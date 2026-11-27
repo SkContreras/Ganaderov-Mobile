@@ -5,6 +5,7 @@ import '../../../auth/domain/auth_gateway.dart';
 import '../../../livestock/domain/inventory.dart';
 import '../../../livestock/domain/event_draft.dart';
 import '../../domain/journey.dart';
+import '../../../livestock/domain/local_changes.dart';
 
 class JourneysPage extends StatefulWidget {
   const JourneysPage({super.key,required this.inventory,required this.auth,required this.changes});
@@ -51,16 +52,25 @@ class _JourneysPageState extends State<JourneysPage>{
   Future<void> _run(Future<void> Function() action)async{
     if(_busy)return;
     setState((){_busy=true;_error=null;});
-    try{await action();if(mounted)await _load();}
+    try{await action();if(mounted)await _refreshLocal();}
     on StateError catch(e){if(mounted)setState(()=>_error=e.message.toString());}
     catch(_){if(mounted){await _load();if(mounted)setState(()=>_error='No se confirmó el cambio. Actualiza antes de repetir.');}}
     finally{if(mounted)setState(()=>_busy=false);}
+  }
+  Future<void> _refreshLocal()async{
+    final snapshot=_snapshot,inventory=widget.inventory,repo=extended,request=_request;
+    if(snapshot==null||inventory is! OfflineInventory||repo==null||!repo.supportsOfflineJourneys){await _load();return;}
+    final next=await (inventory as OfflineInventory).refreshLocalInventory(snapshot);
+    final journeys=await repo.refreshLocalJourneys(next),pending=<String,Set<String>>{};
+    for(final journey in journeys){pending[journey.id]=await repo.pendingJourneyAnimals(next,journey.id);}
+    if(!mounted||request!=_request||!widget.auth.signedIn)return;
+    setState((){_snapshot=next;_items=journeys;_pending=pending;});
   }
   Future<void> _create()async{
     final snapshot=_snapshot,repo=repository;
     if(snapshot==null||repo==null)return;
     final result=await Navigator.of(context).push<String>(MaterialPageRoute(builder:(_)=>_CreateJourney(snapshot:snapshot,repository:repo)));
-    if(mounted&&result!=null){_selected=result;await _load();}
+    if(mounted&&result!=null){_selected=result;await _refreshLocal();}
   }
   Future<void> _attend(Journey j,Map<String,dynamic> animal)async{
     final snapshot=_snapshot,repo=repository;
@@ -81,13 +91,13 @@ class _JourneysPageState extends State<JourneysPage>{
   }
   Future<void> _finish(Journey j)async{
     final s=_snapshot,repo=repository;
-    if(s==null||repo==null||!s.canManage)return;
+    if(s==null||repo==null||!s.canCaptureAnimals)return;
     final yes=await showDialog<bool>(context:context,builder:(context)=>AlertDialog(title:const Text('Finalizar jornada'),content:Text('Se generarán los historiales de ${j.attended} animales. Quedarán ${j.pending} pendientes.'),actions:[TextButton(onPressed:()=>Navigator.pop(context,false),child:const Text('Cancelar')),FilledButton(onPressed:()=>Navigator.pop(context,true),child:const Text('Finalizar'))]));
     if(mounted&&yes==true)await _run(()=>repo.finishJourney(s,j));
   }
   Future<void> _resume(Journey j)async{
     final s=_snapshot,repo=repository;
-    if(s==null||repo==null||!s.canManage||!repo.supportsJourneyResume)return;
+    if(s==null||repo==null||!s.canCaptureAnimals||!repo.supportsJourneyResume)return;
     final yes=await showDialog<bool>(context:context,builder:(context)=>AlertDialog(title:const Text('Reanudar jornada'),content:Text('Se conservarán ${j.attended} animales atendidos. Podrás continuar con ${j.pending} pendientes.'),actions:[TextButton(onPressed:()=>Navigator.pop(context,false),child:const Text('Cancelar')),FilledButton(onPressed:()=>Navigator.pop(context,true),child:const Text('Reanudar'))]));
     if(mounted&&yes==true)await _run(()=>repo.resumeJourney(s,j));
   }
@@ -103,12 +113,13 @@ class _JourneysPageState extends State<JourneysPage>{
       if(selected==null&&_snapshot?.status=='active'&&(_snapshot?.offline==false||offlineEnabled))...[
         FilledButton.icon(onPressed:_busy?null:_create,icon:const Icon(Icons.add),label:const Text('Nueva jornada')),
         if(_items.isEmpty)const Text('No hay jornadas registradas.'),
-        for(final j in _items)Card(child:ListTile(title:Text(j.title),subtitle:Text('${j.date} · ${j.attended}/${j.roster.length} atendidos · ${j.open?'En curso':j.status=='completed'?'Completada':'Incompleta'}'),trailing:const Icon(Icons.chevron_right),onTap:(){setState((){_selected=j.id;_query='';_filter='all';});})),
+        for(final j in _items)Card(child:ListTile(title:Text(j.title),subtitle:Text('${j.date} · ${j.attended}/${j.roster.length} atendidos · ${j.open?'En curso':j.status=='completed'?'Completada':'Incompleta'}${j.syncState==null?'':'\n${pendingLabel(j.syncState)}'}'),trailing:const Icon(Icons.chevron_right),onTap:(){setState((){_selected=j.id;_query='';_filter='all';});})),
       ],
       if(selected!=null)...[
         TextButton.icon(onPressed:()=>setState(()=>_selected=null),icon:const Icon(Icons.arrow_back),label:const Text('Volver a jornadas')),
         Text(selected.title,style:Theme.of(context).textTheme.headlineMedium),
         Text(selected.date),
+        if(selected.syncState!=null)Text(pendingLabel(selected.syncState)),
         if((_pending[selected.id]?.length??0)>0)Text('${_pending[selected.id]!.length} asistencias en cola; no confirmadas.'),
         if(offlineEnabled&&selected.open&&(selected.type!='other'||manager))OutlinedButton(onPressed:_busy?null:()=>_addAnimals(selected),child:const Text('Agregar animales')),
         for(final k in ['product','dose','notes'])if((selected.payload[k]?.toString()??'').isNotEmpty)Text(selected.payload[k].toString()),
@@ -124,11 +135,11 @@ class _JourneysPageState extends State<JourneysPage>{
               leading:Icon(a['attended']==true?Icons.check_circle:Icons.radio_button_unchecked),
               title:Text('${a['tag']??''} · ${a['name']??''}'),
               subtitle:Text(_pending[selected.id]?.contains(a['id'])==true?'En cola, sin confirmar':a['attended']==true?(selected.type=='weight'?'${a['weight']} kg':'Atendido'):'Pendiente'),
-              trailing:selected.open&&(eventTypes.containsKey(selected.type)||(selected.type=='other'&&manager&&offlineEnabled))&&_pending[selected.id]?.contains(a['id'])!=true&&(_snapshot?.animals.any((x)=>x.id==a['id']&&x.active)??false)&&(a['attended']!=true||selected.type=='weight')?TextButton(onPressed:_busy?null:()=>_attend(selected,a),child:Text(selected.type=='weight'?'Pesar':'Atender')):null,
+              trailing:selected.open&&(standardJourneyTypes.contains(selected.type)||(selected.type=='other'&&manager&&offlineEnabled))&&_pending[selected.id]?.contains(a['id'])!=true&&(_snapshot?.animals.any((x)=>x.id==a['id']&&x.active)??false)&&(a['attended']!=true||selected.type=='weight')?TextButton(onPressed:_busy?null:()=>_attend(selected,a),child:Text(selected.type=='weight'?'Pesar':'Atender')):null,
             )),
-        if(selected.open&&_snapshot?.canManage==true&&(eventTypes.containsKey(selected.type)||(selected.type=='other'&&offlineEnabled))&&(_pending[selected.id]?.isEmpty??true))FilledButton(onPressed:_busy?null:()=>_finish(selected),child:const Text('Finalizar jornada')),
-        if(selected.status=='incomplete'&&selected.pending>0&&_snapshot?.canManage==true&&repository?.supportsJourneyResume==true)OutlinedButton(onPressed:_busy?null:()=>_resume(selected),child:const Text('Reanudar jornada')),
-        if(selected.open&&_snapshot?.canManage!=true)const Text('Un administrador debe finalizar la jornada.'),
+        if(selected.open&&_snapshot?.canCaptureAnimals==true&&(standardJourneyTypes.contains(selected.type)||(selected.type=='other'&&offlineEnabled)))FilledButton(onPressed:_busy?null:()=>_finish(selected),child:const Text('Finalizar jornada')),
+        if(selected.status=='incomplete'&&selected.pending>0&&_snapshot?.canCaptureAnimals==true&&repository?.supportsJourneyResume==true)OutlinedButton(onPressed:_busy?null:()=>_resume(selected),child:const Text('Reanudar jornada')),
+        if(selected.open&&_snapshot?.canCaptureAnimals!=true)const Text('Un administrador debe finalizar la jornada.'),
       ],
     ])));
   }
@@ -169,7 +180,7 @@ class _CreateJourneyState extends State<_CreateJourney>{
   @override Widget build(BuildContext context){
     final locked=_busy||_uncertain;
     return PopScope(canPop:!_busy,child:Scaffold(appBar:AppBar(title:const Text('Nueva jornada')),body:SafeArea(child:ListView(padding:const EdgeInsets.all(20),children:[
-      DropdownButtonFormField<String>(initialValue:_type,items:[for(final e in eventTypes.entries)DropdownMenuItem(value:e.key,child:Text(e.value)),if(widget.repository is ExtendedJourneyRepository&&(widget.repository as ExtendedJourneyRepository).supportsOfflineJourneys&&['owner','admin'].contains(widget.snapshot.role))const DropdownMenuItem(value:'other',child:Text('Actividad personalizada'))],onChanged:locked?null:(v)=>setState(()=>_type=v!),decoration:const InputDecoration(labelText:'Tipo')),
+      DropdownButtonFormField<String>(initialValue:_type,items:[for(final e in eventTypes.entries)if(standardJourneyTypes.contains(e.key))DropdownMenuItem(value:e.key,child:Text(e.value)),if(widget.repository is ExtendedJourneyRepository&&(widget.repository as ExtendedJourneyRepository).supportsOfflineJourneys&&['owner','admin'].contains(widget.snapshot.role))const DropdownMenuItem(value:'other',child:Text('Actividad personalizada'))],onChanged:locked?null:(v)=>setState(()=>_type=v!),decoration:const InputDecoration(labelText:'Tipo')),
       OutlinedButton(onPressed:locked?null:()async{final d=await showDatePicker(context:context,initialDate:_date,firstDate:DateTime(1900),lastDate:DateTime.now());if(mounted&&d!=null)setState(()=>_date=d);},child:Text(DateFormat('dd/MM/yyyy').format(_date))),
       if(_type=='other')TextField(controller:_name,enabled:!locked,maxLength:120,decoration:const InputDecoration(labelText:'Nombre de actividad')),
       TextField(controller:_product,enabled:!locked,maxLength:120,decoration:const InputDecoration(labelText:'Producto')),

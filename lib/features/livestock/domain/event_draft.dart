@@ -3,6 +3,8 @@ import 'inventory.dart';
 const eventTypes = {
   'weight':'Pesaje','bath':'Baño','vaccine':'Vacunación','deworm':'Desparasitación',
   'injection':'Inyección','medication':'Medicamento','review':'Revisión veterinaria',
+  'note':'Observación',
+  'other':'Otra actividad',
 };
 class EventDraft {
   const EventDraft({required this.id,required this.type,required this.date,this.weight,this.product='',this.notes='',this.capturedAt});
@@ -17,6 +19,7 @@ class EventDraft {
     if(parsed==null||!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)||parsed.toIso8601String().substring(0,10)!=date||parsed.isAfter(DateTime.now()))throw StateError('Fecha inválida.');
     if(type=='weight'&&(weight==null||!weight!.isFinite||weight!<0||weight!>100000))throw StateError('Introduce un peso válido.');
     if(product.length>120||notes.length>2000)throw StateError('Texto demasiado largo.');
+    if(type=='note'&&notes.trim().isEmpty)throw StateError('Escribe la observación');
   }
   Map<String,dynamic> toEvent(String animalId,Map<String,dynamic> actor,DateTime now){
     validate();
@@ -26,4 +29,9 @@ class EventDraft {
 }
 abstract interface class AnimalEventWriter {
   Future<void> addEvent(InventorySnapshot snapshot,String animalId,EventDraft draft);
+}
+abstract interface class HistoricalEventWriter {
+  bool get supportsHistoricalEvents;
+  Future<void> updateHistoricalEvent(InventorySnapshot snapshot,String animalId,AnimalEvent event,Map<String,dynamic> changes,String reason,{String? operationId});
+  Future<void> deleteHistoricalEvent(InventorySnapshot snapshot,String animalId,AnimalEvent event,String reason,{String? operationId});
 }

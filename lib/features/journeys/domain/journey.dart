@@ -1,8 +1,11 @@
 import '../../livestock/domain/inventory.dart';
 import '../../livestock/domain/event_draft.dart';
 
+const standardJourneyTypes={'weight','bath','vaccine','deworm','injection','medication','review'};
+
 class Journey {
-  const Journey(this.id,this.version,this.payload,{this.revision});
+  const Journey(this.id,this.version,this.payload,{this.revision,this.syncState});
+  final String? syncState;
   final int? revision;
   final String id,version;
   final Map<String,dynamic> payload;
@@ -30,4 +33,5 @@ abstract interface class ExtendedJourneyRepository{
  Future<void> createCustomJourney(InventorySnapshot snapshot,String id,String name,String date,String product,String dose,String notes,Set<String> animalIds);
  Future<void> addJourneyAnimals(InventorySnapshot snapshot,Journey journey,Set<String> animalIds);
  Future<Set<String>> pendingJourneyAnimals(InventorySnapshot snapshot,String journeyId);
+ Future<List<Journey>> refreshLocalJourneys(InventorySnapshot snapshot);
 }
