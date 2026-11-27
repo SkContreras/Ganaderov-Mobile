@@ -42,6 +42,7 @@ dependencies:
   connectivity_plus: ^7.3.2
   image_picker: ^1.2.4
   flutter_secure_storage: ^11.2.0
+  pointycastle: 4.0.0
   cached_network_image: ^4.0.7
   workmanager: ^0.10.10
   http: 1.6.0

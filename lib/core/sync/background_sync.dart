@@ -20,7 +20,8 @@ void backgroundCallbackDispatcher(){
   Workmanager().executeTask((task,inputData)async{
     WidgetsFlutterBinding.ensureInitialized();
     if(task!=backgroundTaskName||!SupabaseConfig.backgroundSyncEnabled||!SupabaseConfig.eventRpcEnabled)return true;
-    final db=OfflineStore();
+    final OfflineStore db;
+    try{db=await OfflineStore.protected();}catch(_){return false;}
     final holder=const Uuid().v4();
     final httpClient=http.Client();
     try{

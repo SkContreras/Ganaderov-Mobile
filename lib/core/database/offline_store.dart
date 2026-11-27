@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'local_cipher.dart';
+import 'local_key.dart';
 import 'package:uuid/uuid.dart';
 import '../sync/event_protocol.dart';
 import '../sync/event_outbox.dart';
@@ -8,8 +10,23 @@ import 'package:drift_flutter/drift_flutter.dart';
 import '../../features/livestock/domain/inventory.dart';
 
 class OfflineStore extends GeneratedDatabase {
-  OfflineStore([QueryExecutor? executor]):super(executor??driftDatabase(name:'ganaderov_local'));
-  @override int get schemaVersion=>4;
+  OfflineStore([QueryExecutor? executor, this.cipher]):super(executor??driftDatabase(name:'ganaderov_local'));
+  final LocalCipher? cipher;
+  static Future<OfflineStore> protected({bool provision=false})async{
+    final key=provision?await LocalKey.provision():await LocalKey.read();
+    if(key==null)throw StateError('Clave local no disponible');
+    final db=OfflineStore(null,key);
+    try{await db.customSelect('SELECT 1').get();return db;}catch(_){await db.close();rethrow;}
+  }
+  String _scope(List<String> parts)=>jsonEncode(parts);
+  String _seal(String text,List<String> parts)=>cipher?.seal(text,_scope(parts))??text;
+  String _open(String text,List<String> parts){
+    if(cipher!=null)return cipher!.open(text,_scope(parts));
+    if(text.startsWith(LocalCipher.prefix))throw StateError('Clave local no disponible');
+    return text;
+  }
+  List<String> _eventScope(String user,String owner,String event,String field)=>['outbox',user,owner,event,field];
+  @override int get schemaVersion=>5;
   @override Iterable<TableInfo<Table,Object?>> get allTables=>const [];
   @override List<DatabaseSchemaEntity> get allSchemaEntities=>const [];
   @override MigrationStrategy get migration=>MigrationStrategy(onCreate:(_)async{
@@ -17,7 +34,23 @@ class OfflineStore extends GeneratedDatabase {
     await _createOutbox();
     await _upgradeProtocol();
     await _createDeliveryLease();
-  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();});
+    await _protectExisting();
+  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<5)await _protectExisting();});
+  Future<void> _protectExisting()async{
+    if(cipher==null)return;
+    await transaction(()async{
+      final rows=await customSelect('SELECT * FROM inventory_cache').get();
+      for(final row in rows){
+        final user=row.read<String>('user_id'),owner=row.read<String>('owner_id');
+        await customStatement('UPDATE inventory_cache SET payload=? WHERE user_id=?',[_seal(row.read<String>('payload'),['inventory',user,owner]),user]);
+      }
+      for(final row in await customSelect('SELECT * FROM event_outbox').get()){
+        final user=row.read<String>('user_id'),owner=row.read<String>('owner_id'),event=row.read<String>('event_id');
+        String? protect(String field){final raw=row.readNullable<String>(field);return raw==null?null:_seal(raw,_eventScope(user,owner,event,field));}
+        await customStatement('UPDATE event_outbox SET payload=?,operation=?,receipt=?,error=? WHERE user_id=? AND owner_id=? AND event_id=?',[protect('payload'),protect('operation'),protect('receipt'),protect('error'),user,owner,event]);
+      }
+    });
+  }
   Future<void> _createDeliveryLease()=>customStatement('CREATE TABLE sync_delivery_lease (id INTEGER PRIMARY KEY CHECK(id=1), holder TEXT NOT NULL, expires_at INTEGER NOT NULL)');
   // All RPC senders share this lease. Expiry allows recovery after process death.
   Future<bool> acquireDeliveryLease(String holder,int now) => transaction(()async{
@@ -40,7 +73,7 @@ class OfflineStore extends GeneratedDatabase {
   Future<void> save(InventorySnapshot s)async{
     if(s.status!='active'||s.userId.isEmpty||s.ownerId.isEmpty||s.offline)throw StateError('Instantánea no válida');
     final json=jsonEncode({'ranchName':s.ranchName,'role':s.role,'records':s.records,'statusOptions':s.statusOptions,'statusLabels':s.statusLabels,'config':s.config,'configRevision':s.configRevision});
-    await customStatement('INSERT INTO inventory_cache(user_id,owner_id,saved_at,payload) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET owner_id=excluded.owner_id,saved_at=excluded.saved_at,payload=excluded.payload',[s.userId,s.ownerId,DateTime.now().millisecondsSinceEpoch,json]);
+    await customStatement('INSERT INTO inventory_cache(user_id,owner_id,saved_at,payload) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET owner_id=excluded.owner_id,saved_at=excluded.saved_at,payload=excluded.payload',[s.userId,s.ownerId,DateTime.now().millisecondsSinceEpoch,_seal(json,['inventory',s.userId,s.ownerId])]);
   }
   Future<InventorySnapshot?> read(String userId)async{
     final row=await customSelect('SELECT owner_id,saved_at,payload FROM inventory_cache WHERE user_id = ?',variables:[Variable.withString(userId)]).getSingleOrNull();
@@ -48,7 +81,7 @@ class OfflineStore extends GeneratedDatabase {
     final saved=DateTime.fromMillisecondsSinceEpoch(row.read<int>('saved_at'));
     final age=DateTime.now().difference(saved);
     if(age.isNegative||age>const Duration(hours:24)){await purge(userId);return null;}
-    final p=jsonDecode(row.read<String>('payload')) as Map<String,dynamic>;
+    final p=jsonDecode(_open(row.read<String>('payload'),['inventory',userId,row.read<String>('owner_id')])) as Map<String,dynamic>;
     if(!['owner','admin','worker'].contains(p['role'])||row.read<String>('owner_id').isEmpty){await purge(userId);return null;}
     final s=InventorySnapshot(status:'active',ranchName:p['ranchName'] as String,role:p['role'] as String,userId:userId,ownerId:row.read<String>('owner_id'),records:(p['records'] as List).map((e)=>Map<String,dynamic>.from(e as Map)).toList(),statusOptions:Map<String,bool>.from(p['statusOptions'] as Map),statusLabels:Map<String,String>.from(p['statusLabels'] as Map),config:Map<String,dynamic>.from(p['config'] as Map),configRevision:p['configRevision'] as int,offline:true,cachedAt:saved);
     // Validate shape before exposing cached data.
@@ -66,25 +99,27 @@ class OfflineStore extends GeneratedDatabase {
     await transaction(()async{
       final rows=await customSelect('SELECT animal_id,payload FROM event_outbox WHERE user_id=? AND owner_id=? AND event_id=?',variables:[Variable.withString(p.userId),Variable.withString(p.ownerId),Variable.withString(p.draft.id)]).get();
       if(rows.isNotEmpty){
-        if(rows.first.read<String>('animal_id')!=p.animalId||rows.first.read<String>('payload')!=json)throw StateError('El registro pendiente contiene otros datos.');
+        if(rows.first.read<String>('animal_id')!=p.animalId||_open(rows.first.read<String>('payload'),_eventScope(p.userId,p.ownerId,p.draft.id,'payload'))!=json)throw StateError('El registro pendiente contiene otros datos.');
         return;
       }
       final operation=rpc?jsonEncode(buildEventOperation(p,operationId:const Uuid().v4(),deviceId:await _deviceId())):null;
-      await customStatement('INSERT INTO event_outbox(user_id,owner_id,event_id,animal_id,payload,operation) VALUES(?,?,?,?,?,?)',[p.userId,p.ownerId,p.draft.id,p.animalId,json,operation]);
+      await customStatement('INSERT INTO event_outbox(user_id,owner_id,event_id,animal_id,payload,operation) VALUES(?,?,?,?,?,?)',[p.userId,p.ownerId,p.draft.id,p.animalId,_seal(json,_eventScope(p.userId,p.ownerId,p.draft.id,'payload')),operation==null?null:_seal(operation,_eventScope(p.userId,p.ownerId,p.draft.id,'operation'))]);
+      await customStatement('UPDATE event_outbox SET error=? WHERE user_id=? AND owner_id=? AND event_id=?',[_seal('',_eventScope(p.userId,p.ownerId,p.draft.id,'error')),p.userId,p.ownerId,p.draft.id]);
     });
   }
   Future<List<PendingEvent>> pending(String userId)async{
     final rows=await customSelect('SELECT * FROM event_outbox WHERE user_id=? AND state NOT IN (\'confirmed\',\'archived\') ORDER BY rowid',variables:[Variable.withString(userId)]).get();
-    return [for(final row in rows)PendingEvent(userId:userId,ownerId:row.read<String>('owner_id'),animalId:row.read<String>('animal_id'),draft:EventDraft.fromJson(jsonDecode(row.read<String>('payload')) as Map<String,dynamic>),attempts:row.read<int>('attempts'),nextAt:row.read<int>('next_at'),error:row.read<String>('error'),state:row.read<String>('state'),operation:row.readNullable<String>('operation')==null?null:Map<String,dynamic>.from(jsonDecode(row.read<String>('operation')) as Map))];
+    String decode(QueryRow row,String field)=>_open(row.read<String>(field),_eventScope(userId,row.read<String>('owner_id'),row.read<String>('event_id'),field));
+    return [for(final row in rows)PendingEvent(userId:userId,ownerId:row.read<String>('owner_id'),animalId:row.read<String>('animal_id'),draft:EventDraft.fromJson(jsonDecode(decode(row,'payload')) as Map<String,dynamic>),attempts:row.read<int>('attempts'),nextAt:row.read<int>('next_at'),error:decode(row,'error'),state:row.read<String>('state'),operation:row.readNullable<String>('operation')==null?null:Map<String,dynamic>.from(jsonDecode(decode(row,'operation')) as Map))];
   }
-  Future<void> confirmRpc(PendingEvent p,Map<String,dynamic> receipt)=>customStatement("UPDATE event_outbox SET state='confirmed',receipt=?,error='' WHERE user_id=? AND owner_id=? AND event_id=? AND state='pending'",[jsonEncode(receipt),p.userId,p.ownerId,p.draft.id]);
+  Future<void> confirmRpc(PendingEvent p,Map<String,dynamic> receipt)=>customStatement("UPDATE event_outbox SET state='confirmed',receipt=?,error=? WHERE user_id=? AND owner_id=? AND event_id=? AND state='pending'",[_seal(jsonEncode(receipt),_eventScope(p.userId,p.ownerId,p.draft.id,'receipt')),_seal('',_eventScope(p.userId,p.ownerId,p.draft.id,'error')),p.userId,p.ownerId,p.draft.id]);
   Future<void> stopRpc(PendingEvent p,String state,String code)async{
     if(!['conflict','rejected'].contains(state))throw ArgumentError.value(state);
-    await customStatement("UPDATE event_outbox SET state=?,error=? WHERE user_id=? AND owner_id=? AND event_id=? AND state='pending'",[state,code,p.userId,p.ownerId,p.draft.id]);
+    await customStatement("UPDATE event_outbox SET state=?,error=? WHERE user_id=? AND owner_id=? AND event_id=? AND state='pending'",[state,_seal(code,_eventScope(p.userId,p.ownerId,p.draft.id,'error')),p.userId,p.ownerId,p.draft.id]);
   }
   Future<void> archiveConflict(PendingEvent p)async{
     await customStatement("UPDATE event_outbox SET state='archived' WHERE user_id=? AND owner_id=? AND event_id=? AND state IN ('conflict','rejected')",[p.userId,p.ownerId,p.draft.id]);
   }
   Future<void> acknowledge(PendingEvent p)=>customStatement('DELETE FROM event_outbox WHERE user_id=? AND owner_id=? AND event_id=?',[p.userId,p.ownerId,p.draft.id]);
-  Future<void> retry(PendingEvent p,String error,int nextAt)=>customStatement('UPDATE event_outbox SET attempts=attempts+1,error=?,next_at=? WHERE user_id=? AND owner_id=? AND event_id=? AND state=\'pending\'',[error,nextAt,p.userId,p.ownerId,p.draft.id]);
+  Future<void> retry(PendingEvent p,String error,int nextAt)=>customStatement('UPDATE event_outbox SET attempts=attempts+1,error=?,next_at=? WHERE user_id=? AND owner_id=? AND event_id=? AND state=\'pending\'',[_seal(error,_eventScope(p.userId,p.ownerId,p.draft.id,'error')),nextAt,p.userId,p.ownerId,p.draft.id]);
 }
