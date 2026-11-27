@@ -11,22 +11,44 @@ import '../../features/livestock/domain/inventory.dart';
 
 class OfflineStore extends GeneratedDatabase {
   OfflineStore([QueryExecutor? executor, this.cipher]):super(executor??driftDatabase(name:'ganaderov_local'));
-  final LocalCipher? cipher;
+  LocalCipher? cipher;
   static Future<OfflineStore> protected({bool provision=false})async{
-    final key=provision?await LocalKey.provision():await LocalKey.read();
-    if(key==null)throw StateError('Clave local no disponible');
-    final db=OfflineStore(null,key);
-    try{await db.customSelect('SELECT 1').get();return db;}catch(_){await db.close();rethrow;}
+    final existing=await LocalKey.read();
+    // A missing key is recoverable only when no encrypted data exists.
+    final db=OfflineStore(null,existing);
+    try{
+      await db.customSelect('SELECT 1').get();
+      if(existing==null){
+        if(!provision||await db._hasEncryptedData())throw StateError('Clave local no disponible; conserva la base para recuperación.');
+        db.cipher=await LocalKey.provision();
+      }
+      await db._protectExisting();
+      return db;
+    }catch(_){await db.close();rethrow;}
   }
   String _scope(List<String> parts)=>jsonEncode(parts);
-  String _seal(String text,List<String> parts)=>cipher?.seal(text,_scope(parts))??text;
+  Future<bool> _hasEncryptedData()async{
+    final rows=await customSelect("SELECT 1 FROM inventory_cache WHERE payload LIKE 'gcm1:%' OR payload LIKE 'gcm2:%' UNION ALL SELECT 1 FROM event_outbox WHERE payload LIKE 'gcm1:%' OR payload LIKE 'gcm2:%' LIMIT 1").get();
+    return rows.isNotEmpty;
+  }
+  String _seal(String text,List<String> parts){
+    if(cipher==null)return text;
+    return LocalCipher.accountPrefix+cipher!.forAccount(parts[1]).seal(text,_scope(parts)).substring(LocalCipher.prefix.length);
+  }
   String _open(String text,List<String> parts){
-    if(cipher!=null)return cipher!.open(text,_scope(parts));
-    if(text.startsWith(LocalCipher.prefix))throw StateError('Clave local no disponible');
+    if(text.startsWith(LocalCipher.accountPrefix)){
+      if(cipher==null)throw StateError('Clave local no disponible');
+      return cipher!.forAccount(parts[1]).open(LocalCipher.prefix+text.substring(LocalCipher.accountPrefix.length),_scope(parts));
+    }
+    if(text.startsWith(LocalCipher.prefix)){
+      if(cipher==null)throw StateError('Clave local no disponible');
+      return cipher!.open(text,_scope(parts));
+    }
+    if(cipher!=null)throw const FormatException('Contenido sin cifrar');
     return text;
   }
   List<String> _eventScope(String user,String owner,String event,String field)=>['outbox',user,owner,event,field];
-  @override int get schemaVersion=>5;
+  @override int get schemaVersion=>6;
   @override Iterable<TableInfo<Table,Object?>> get allTables=>const [];
   @override List<DatabaseSchemaEntity> get allSchemaEntities=>const [];
   @override MigrationStrategy get migration=>MigrationStrategy(onCreate:(_)async{
@@ -35,18 +57,23 @@ class OfflineStore extends GeneratedDatabase {
     await _upgradeProtocol();
     await _createDeliveryLease();
     await _protectExisting();
-  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<5)await _protectExisting();});
+  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<6)await _protectExisting();});
   Future<void> _protectExisting()async{
     if(cipher==null)return;
     await transaction(()async{
+      String migrate(String raw,List<String> scope){
+        if(raw.startsWith(LocalCipher.accountPrefix)){_open(raw,scope);return raw;}
+        final plain=raw.startsWith(LocalCipher.prefix)?_open(raw,scope):raw;
+        return _seal(plain,scope);
+      }
       final rows=await customSelect('SELECT * FROM inventory_cache').get();
       for(final row in rows){
         final user=row.read<String>('user_id'),owner=row.read<String>('owner_id');
-        await customStatement('UPDATE inventory_cache SET payload=? WHERE user_id=?',[_seal(row.read<String>('payload'),['inventory',user,owner]),user]);
+        await customStatement('UPDATE inventory_cache SET payload=? WHERE user_id=?',[migrate(row.read<String>('payload'),['inventory',user,owner]),user]);
       }
       for(final row in await customSelect('SELECT * FROM event_outbox').get()){
         final user=row.read<String>('user_id'),owner=row.read<String>('owner_id'),event=row.read<String>('event_id');
-        String? protect(String field){final raw=row.readNullable<String>(field);return raw==null?null:_seal(raw,_eventScope(user,owner,event,field));}
+        String? protect(String field){final raw=row.readNullable<String>(field);return raw==null?null:migrate(raw,_eventScope(user,owner,event,field));}
         await customStatement('UPDATE event_outbox SET payload=?,operation=?,receipt=?,error=? WHERE user_id=? AND owner_id=? AND event_id=?',[protect('payload'),protect('operation'),protect('receipt'),protect('error'),user,owner,event]);
       }
     });

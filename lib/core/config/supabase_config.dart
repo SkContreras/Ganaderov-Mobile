@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'secure_session_storage.dart';
 
 abstract final class SupabaseConfig {
   static const backgroundSyncEnabled = bool.fromEnvironment('SYNC_BACKGROUND_V1');
@@ -17,6 +18,6 @@ abstract final class SupabaseConfig {
       );
     }
 
-    await Supabase.initialize(url: url, publishableKey: publishableKey);
+    await Supabase.initialize(url: url, publishableKey: publishableKey,authOptions:FlutterAuthClientOptions(localStorage:SecureSessionStorage(url)));
   }
 }

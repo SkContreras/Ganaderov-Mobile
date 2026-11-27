@@ -9,6 +9,11 @@ class LocalCipher {
   }
   final Uint8List _key;
   static const prefix='gcm1:';
+  static const accountPrefix='gcm2:';
+  LocalCipher forAccount(String account){
+    final mac=HMac(SHA256Digest(),64)..init(KeyParameter(_key));
+    return LocalCipher(mac.process(Uint8List.fromList(utf8.encode('ganaderov/account/v2:$account'))));
+  }
   static Uint8List randomBytes(int length){
     final random=Random.secure();
     return Uint8List.fromList(List.generate(length,(_)=>random.nextInt(256)));
