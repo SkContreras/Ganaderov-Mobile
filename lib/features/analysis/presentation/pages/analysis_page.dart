@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:uuid/uuid.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:intl/intl.dart';
 import '../../../auth/domain/auth_gateway.dart';
@@ -74,6 +75,7 @@ class _AnalysisPageState extends State<AnalysisPage>{
             for(final f in forecasts.take(10))ListTile(title:Text('${f.predicted.toStringAsFixed(1)} kg · ${f.targetDate}'),subtitle:Text(f.actual==null?'Pendiente de evaluación en servidor':'Real: ${f.actual!.toStringAsFixed(1)} kg · ${f.actualDate} · Error: ${f.error!.toStringAsFixed(2)} kg${f.absolutePercent==null?"":" · ${f.absolutePercent!.toStringAsFixed(1)}%"}')),
           ],
         ],
+        if(widget.repository is AnalysisPreferences)_QuotePanel(key:ValueKey('quotes-${_snapshot!.userId}-${_snapshot!.ownerId}'),snapshot:_snapshot!,access:widget.repository as AnalysisPreferences,animals:_animals,lot:_lot),
         _ScenarioTools(key:ValueKey('$_id-$_lot-${lot?.count}-${points.isEmpty?'':points.last.weight}-${basis?.gain}'),initialCount:lot?.count,initialTarget:double.tryParse(animal?.value('targetWeightMin')??''),initialWeight:points.isEmpty?null:points.last.weight,initialGain:basis?.gain,baseDate:points.isEmpty?null:points.last.date),
       ],
     ])));
@@ -171,4 +173,70 @@ class _WeightChart extends CustomPainter{
     for(var i=0;i<points.length;i++){if(old.points[i].date!=points[i].date||old.points[i].weight!=points[i].weight)return true;}
     return false;
   }
+}
+ 
+class _QuotePanel extends StatefulWidget{
+ const _QuotePanel({super.key,required this.snapshot,required this.access,required this.animals,this.lot});
+ final InventorySnapshot snapshot;final AnalysisPreferences access;final List<InventoryAnimal> animals;final String? lot;
+ @override State<_QuotePanel> createState()=>_QuotePanelState();
+}
+class _QuotePanelState extends State<_QuotePanel>{
+ List<PriceQuote> _quotes=[];String? _selected;bool _busy=false;String? _error;
+ final _days=TextEditingController(text:'30'),_cost=TextEditingController(text:'0');
+ @override void initState(){super.initState();_load();}
+ @override void dispose(){_days.dispose();_cost.dispose();super.dispose();}
+ Future<void> _load()async{
+  try{final q=await widget.access.quotes(widget.snapshot);if(mounted)setState((){_quotes=q;if(!q.any((x)=>x.id==_selected))_selected=null;});}catch(e){if(mounted)setState(()=>_error=e.toString());}
+ }
+ Future<void> _edit()async{
+  final quote=await showDialog<PriceQuote>(context:context,builder:(_)=>const _QuoteDialog());
+  if(!mounted||quote==null)return;
+  await _run(()=>widget.access.saveQuote(widget.snapshot,quote));
+ }
+ Future<void> _run(Future<void> Function() action)async{
+  if(_busy)return;setState((){_busy=true;_error=null;});
+  try{await action();await _load();}catch(e){if(mounted)setState(()=>_error=e.toString());}finally{if(mounted)setState(()=>_busy=false);}
+ }
+ @override Widget build(BuildContext context){
+  final quote=_quotes.where((q)=>q.id==_selected).firstOrNull,days=int.tryParse(_days.text),cost=double.tryParse(_cost.text);
+  LotSaleResult? result;
+  if(quote!=null&&widget.lot!=null&&days!=null&&days>=0&&days<=3650&&cost!=null&&cost.isFinite&&cost>=0)result=evaluateLot(widget.animals,widget.lot!,days,quote,cost);
+  final money=NumberFormat.currency(locale:'es_MX',symbol:r'$');
+  return Card(child:Padding(padding:const EdgeInsets.all(16),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+   Text('Cotizaciones locales',style:Theme.of(context).textTheme.titleLarge),
+   const Text('Precios capturados por el usuario, no precios en tiempo real. Se guardan cifrados en este dispositivo.'),
+   DropdownButtonFormField<String>(key:ValueKey(_selected),initialValue:_selected??'',isExpanded:true,items:[const DropdownMenuItem(value:'',child:Text('Seleccionar cotización')),for(final q in _quotes)DropdownMenuItem(value:q.id,child:Text('${q.category} · ${q.date} · ${q.average} MXN/kg',overflow:TextOverflow.ellipsis))],onChanged:_busy?null:(v)=>setState(()=>_selected=v==''?null:v)),
+   Wrap(children:[TextButton(onPressed:_busy?null:_edit,child:const Text('Nueva cotización')),if(quote!=null)TextButton(onPressed:_busy?null:()=>_run(()=>widget.access.deleteQuote(widget.snapshot,quote.id)),child:const Text('Eliminar'))]),
+   if(quote!=null)...[
+    Text('Rango: ${quote.minimum}–${quote.maximum} MXN/kg · promedio ${quote.average}'),
+    if(DateTime.now().difference(DateTime.parse(quote.date)).inDays>30)const Text('Cotización de más de 30 días: verifica su vigencia.'),
+    if(widget.lot!=null)...[
+     Text('Rentabilidad individual agregada · ${widget.lot}'),
+     TextField(controller:_days,keyboardType:TextInputType.number,onChanged:(_)=>setState((){}),decoration:const InputDecoration(labelText:'Plazo (días)')),
+     TextField(controller:_cost,keyboardType:const TextInputType.numberWithOptions(decimal:true),onChanged:(_)=>setState((){}),decoration:const InputDecoration(labelText:'Costo diario por animal (MXN)')),
+     if(result!=null)Text('Incluidos: ${result.included} · Excluidos por datos insuficientes: ${result.excluded}\nVenta actual: ${money.format(result.current)}\nVenta proyectada: ${money.format(result.gross)}\nCostos: ${money.format(result.cost)}\nDiferencia: ${money.format(result.net)}'),
+    ],
+   ],
+   if(_error!=null)Text(_error!),if(_busy)const LinearProgressIndicator(),
+  ])));
+ }
+}
+class _QuoteDialog extends StatefulWidget{
+ const _QuoteDialog();
+ @override State<_QuoteDialog> createState()=>_QuoteDialogState();
+}
+class _QuoteDialogState extends State<_QuoteDialog>{
+ final _category=TextEditingController(),_min=TextEditingController(),_avg=TextEditingController(),_max=TextEditingController(),_threshold=TextEditingController(),_next=TextEditingController();
+ DateTime _date=DateTime.now();String? _error;
+ @override void dispose(){for(final c in [_category,_min,_avg,_max,_threshold,_next]){c.dispose();}super.dispose();}
+ double? n(TextEditingController c)=>double.tryParse(c.text.trim().replaceAll(',','.'));
+ @override Widget build(BuildContext context)=>AlertDialog(title:const Text('Nueva cotización'),content:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
+  TextField(controller:_category,maxLength:120,decoration:const InputDecoration(labelText:'Categoría')),
+  TextButton(onPressed:()async{final d=await showDatePicker(context:context,initialDate:_date,firstDate:DateTime(1900),lastDate:DateTime.now());if(mounted&&d!=null)setState(()=>_date=d);},child:Text(DateFormat('dd/MM/yyyy').format(_date))),
+  for(final field in [('Mínimo MXN/kg',_min),('Promedio MXN/kg',_avg),('Máximo MXN/kg',_max),('Umbral siguiente categoría (opcional)',_threshold),('Precio siguiente categoría (opcional)',_next)])TextField(controller:field.$2,keyboardType:const TextInputType.numberWithOptions(decimal:true),decoration:InputDecoration(labelText:field.$1)),
+  if(_error!=null)Text(_error!),
+ ])),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text('Cancelar')),FilledButton(onPressed:(){
+  final q=PriceQuote(id:const Uuid().v4(),category:_category.text.trim(),date:DateFormat('yyyy-MM-dd').format(_date),minimum:n(_min)??double.nan,average:n(_avg)??double.nan,maximum:n(_max)??double.nan,nextThreshold:_threshold.text.trim().isEmpty?null:n(_threshold)??double.nan,nextAverage:_next.text.trim().isEmpty?null:n(_next)??double.nan);
+  if(!q.valid){setState(()=>_error='Comprueba categoría, rango y siguiente precio.');return;}Navigator.pop(context,q);
+ },child:const Text('Guardar'))]);
 }

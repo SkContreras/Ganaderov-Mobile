@@ -106,3 +106,40 @@ LotSummary summarizeLot(Iterable<InventoryAnimal> animals,String lot){
 List<SaleScenario> compareSalePeriods(SaleScenario base,Iterable<int> periods){
   return (periods.toSet().toList()..sort()).map((d)=>SaleScenario(weight:base.weight,gain:base.gain,days:d,price:base.price,futurePrice:base.futurePrice,dailyCost:base.dailyCost)).where((s)=>s.valid).toList();
 }
+
+
+// Local price references, not live market prices.
+class PriceQuote {
+ const PriceQuote({required this.id,required this.category,required this.date,required this.minimum,required this.average,required this.maximum,this.nextThreshold,this.nextAverage});
+ final String id,category,date;
+ final double minimum,average,maximum;
+ final double? nextThreshold,nextAverage;
+ bool get valid=>category.trim().isNotEmpty&&category.length<=120&&RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)&&DateTime.tryParse(date)?.toIso8601String().substring(0,10)==date&&[minimum,average,maximum].every((v)=>v.isFinite&&v>=0)&&minimum<=average&&average<=maximum&&((nextThreshold==null&&nextAverage==null)||(nextThreshold!=null&&nextAverage!=null&&nextThreshold!.isFinite&&nextThreshold!>0&&nextAverage!.isFinite&&nextAverage!>=0));
+ double priceAt(double weight)=>nextThreshold!=null&&nextAverage!=null&&weight>=nextThreshold!?nextAverage!:average;
+ Map<String,dynamic> toJson()=>{'id':id,'category':category,'date':date,'minimum':minimum,'average':average,'maximum':maximum,'nextThreshold':nextThreshold,'nextAverage':nextAverage};
+ factory PriceQuote.fromJson(Map<String,dynamic> j)=>PriceQuote(id:j['id'] as String,category:j['category'] as String,date:j['date'] as String,minimum:(j['minimum'] as num).toDouble(),average:(j['average'] as num).toDouble(),maximum:(j['maximum'] as num).toDouble(),nextThreshold:(j['nextThreshold'] as num?)?.toDouble(),nextAverage:(j['nextAverage'] as num?)?.toDouble());
+}
+abstract interface class AnalysisPreferences {
+ Future<List<PriceQuote>> quotes(InventorySnapshot snapshot);
+ Future<void> saveQuote(InventorySnapshot snapshot,PriceQuote quote);
+ Future<void> deleteQuote(InventorySnapshot snapshot,String id);
+}
+class LotSaleResult{
+ const LotSaleResult(this.included,this.excluded,this.current,this.gross,this.cost);
+ final int included,excluded;
+ final double current,gross,cost;
+ double get net=>gross-cost-current;
+}
+LotSaleResult evaluateLot(Iterable<InventoryAnimal> animals,String lot,int days,PriceQuote quote,double dailyCost){
+ if(!quote.valid||days<0||days>3650||!dailyCost.isFinite||dailyCost<0)throw ArgumentError('Escenario inválido');
+ var included=0,excluded=0,current=0.0,gross=0.0,cost=0.0;
+ for(final animal in animals.where((a)=>a.active&&a.value('lot')==lot)){
+  final points=weightHistory(animal),basis=recentGrowth(points);
+  if(points.isEmpty||basis==null){excluded++;continue;}
+  final w=points.last.weight,projected=w+basis.gain*days;
+  final base=w*quote.priceAt(w),future=projected*quote.priceAt(projected),expense=days*dailyCost;
+  if(projected<0||![base,future,expense,current+base,gross+future,cost+expense].every((v)=>v.isFinite)){excluded++;continue;}
+  included++;current+=base;gross+=future;cost+=expense;
+ }
+ return LotSaleResult(included,excluded,current,gross,cost);
+}

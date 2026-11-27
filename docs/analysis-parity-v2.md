@@ -1,0 +1,2 @@
+# D1 Android analysis parity
+Local encrypted quotes in SQLite v9, project/account/ranch scope, range validation and optional next category threshold. Heterogeneous lot calculations use each animal's last measured weight and recent measured growth, excluding missing or invalid data. Quotes are device-local like Web, not live prices. No new server writes. No forecast persistence, crop or journey extensions yet; those need a contract extension rather than bypassing universal writes. CI/device tests pending.
