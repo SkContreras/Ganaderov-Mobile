@@ -25,6 +25,7 @@ class _InventoryWithExtraFields implements InventoryRepository {
       'fields': {
         for (final entry in _fieldLabels.entries)
           entry.key: {'label': entry.value, 'detailVisibility': 'summary'},
+        'color': {'detailVisibility': 'summary'},
         'lot': {'detailVisibility': 'hidden'},
       },
     },
@@ -41,6 +42,7 @@ class _InventoryWithExtraFields implements InventoryRepository {
               'tag': '657$id',
               'name': name,
               'sex': 'Macho',
+              'color': 'Colorado',
               'status': status,
               'birthDate': '2023-03-01',
               'birthEstimated': estimated,
@@ -65,7 +67,7 @@ class _InventoryWithExtraFields implements InventoryRepository {
 
 void main() {
   for (final (width, textScale) in [(390.0, 1.0), (320.0, 1.4)]) {
-    testWidgets('inventory keeps summary fields readable at ${width}px', (
+    testWidgets('inventory shows only essential fields at ${width}px', (
       tester,
     ) async {
       tester.view.devicePixelRatio = 1;
@@ -94,11 +96,10 @@ void main() {
 
       final card = find.widgetWithText(Card, 'Herniado');
       for (final text in [
-        'Fecha de nacimiento: 2023-03-01',
-        'Nacimiento estimado: Sí',
-        'Fecha de ingreso al rancho: 2026-11-27',
-        'Procedencia: Nacimiento propio',
-        'Observaciones generales: $_notes',
+        'Número de arete: 6571',
+        'Sexo: Macho',
+        'Color: Colorado',
+        'Activo',
         '210 kg',
         '27/11/2026',
       ]) {
@@ -107,14 +108,19 @@ void main() {
           findsOneWidget,
         );
       }
-      expect(find.textContaining(' · '), findsNothing);
-      expect(find.textContaining('No se muestra'), findsNothing);
-      final preview = find.text('Observaciones generales: $_notes');
-      expect(tester.widget<Text>(preview).maxLines, 2);
-      expect(
-        tester.getRect(card).contains(tester.getRect(preview).center),
-        isTrue,
-      );
+      void expectNoExtraFields(Finder animalCard) {
+        for (final label in _fieldLabels.values) {
+          expect(
+            find.descendant(
+              of: animalCard,
+              matching: find.textContaining(label),
+            ),
+            findsNothing,
+          );
+        }
+      }
+
+      expectNoExtraFields(card);
       expect(tester.takeException(), isNull);
 
       await tester.tap(find.text('Herniado'));
@@ -122,6 +128,22 @@ void main() {
       final note = find.text(_notes);
       await tester.scrollUntilVisible(note, 180);
       expect(tester.widget<Text>(note).maxLines, isNull);
+      for (final (label, value) in [
+        ('Fecha de nacimiento', '2023-03-01'),
+        ('Nacimiento estimado', 'Sí'),
+        ('Fecha de ingreso al rancho', '2026-11-27'),
+        ('Procedencia', 'Nacimiento propio'),
+        ('Observaciones generales', _notes),
+      ]) {
+        expect(
+          find.descendant(
+            of: find.widgetWithText(ListTile, label),
+            matching: find.text(value),
+          ),
+          findsOneWidget,
+        );
+      }
+      expect(find.text('No se muestra'), findsNothing);
       expect(tester.takeException(), isNull);
 
       final back = find.text('Volver al inventario');
@@ -130,9 +152,9 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Archivo (1)'));
       await tester.pumpAndSettle();
-      expect(find.text('Lucero'), findsOneWidget);
-      expect(find.text('Nacimiento estimado: No'), findsOneWidget);
-      expect(find.textContaining(' · '), findsNothing);
+      final archived = find.widgetWithText(Card, 'Lucero');
+      expect(archived, findsOneWidget);
+      expectNoExtraFields(archived);
       expect(tester.takeException(), isNull);
     });
   }

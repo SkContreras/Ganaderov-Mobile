@@ -608,21 +608,19 @@ class _AnimalCard extends StatelessWidget {
   final InventoryAnimal animal;
   final VoidCallback onTap;
   final AnimalFormConfig config;
+  static const _summaryFieldIds = {'tag', 'sex', 'color'};
+
   @override
   Widget build(BuildContext context) {
     final weight = animal.latestWeight;
     final colors = Theme.of(context).colorScheme;
     final summaryFields = <Widget>[];
     for (final field in configurationFields) {
-      if (!config.detailVisible(field, summary: true) ||
-          field.id == 'name' ||
-          field.id == 'status') {
+      if (!_summaryFieldIds.contains(field.id) ||
+          !config.detailVisible(field, summary: true)) {
         continue;
       }
-      final raw = animal.fields[field.id];
-      final value = field.kind == 'boolean' && raw is bool
-          ? (raw ? 'Sí' : 'No')
-          : animal.value(field.id);
+      final value = animal.value(field.id);
       if (value.isEmpty) continue;
       summaryFields.add(
         Text.rich(
