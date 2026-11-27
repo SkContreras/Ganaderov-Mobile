@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import '../../analysis/domain/productive_analysis.dart';
 import 'dart:convert';
 import '../../../core/sync/universal_sync.dart';
 import '../../../core/sync/manual_resolution.dart';
@@ -17,7 +18,7 @@ import '../domain/event_draft.dart';
 import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
-class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalLifecycleWriter, AnimalPhotos, AnimalPhotoRemoval, AnimalEventWriter, JourneyRepository, OutboxAccess, ConflictAccess {
+class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalLifecycleWriter, AnimalPhotos, AnimalPhotoRemoval, AnimalEventWriter, JourneyRepository, OutboxAccess, ConflictAccess, AnalysisPreferences {
   SupabaseInventoryRepository(this.client,{this.store,this.onSynced,this.eventRpcEnabled=false,this.journeyRpcEnabled=false,this.universalEnabled=false,this.incrementalEnabled=false,this.project=''});
   final bool universalEnabled,incrementalEnabled;
   final String project;
@@ -72,6 +73,22 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     _universal.verify(user);
     await store!.replaceConflict(user,owner,entry['id'] as String,op,replacement);
     unawaited(syncEvents().catchError((Object _){}));
+  }
+  void _quoteScope(InventorySnapshot s){
+    if(s.status!='active'||s.userId.isEmpty||s.ownerId.isEmpty||s.userId!=client.auth.currentUser?.id||client.auth.currentSession==null||store==null)throw StateError('Sesión inválida');
+  }
+  @override Future<List<PriceQuote>> quotes(InventorySnapshot s)async{
+    _quoteScope(s);
+    final rows=await store!.readQuotes(s.userId,s.ownerId,project);
+    _quoteScope(s);
+    return rows.map(PriceQuote.fromJson).where((q)=>q.valid).toList();
+  }
+  @override Future<void> saveQuote(InventorySnapshot s,PriceQuote quote)async{
+    _quoteScope(s);if(!quote.valid)throw ArgumentError('Cotización inválida');
+    await store!.changeQuote(s.userId,s.ownerId,project,quote.toJson(),quote.id);
+  }
+  @override Future<void> deleteQuote(InventorySnapshot s,String id)async{
+    _quoteScope(s);await store!.changeQuote(s.userId,s.ownerId,project,null,id);
   }
   final bool journeyRpcEnabled;
   @override bool get supportsJourneyResume=>journeyRpcEnabled;

@@ -48,7 +48,7 @@ class OfflineStore extends GeneratedDatabase {
     return text;
   }
   List<String> _eventScope(String user,String owner,String event,String field)=>['outbox',user,owner,event,field];
-  @override int get schemaVersion=>8;
+  @override int get schemaVersion=>9;
   @override Iterable<TableInfo<Table,Object?>> get allTables=>const [];
   @override List<DatabaseSchemaEntity> get allSchemaEntities=>const [];
   @override MigrationStrategy get migration=>MigrationStrategy(onCreate:(_)async{
@@ -58,12 +58,25 @@ class OfflineStore extends GeneratedDatabase {
     await _createDeliveryLease();
     await _createUniversal();
     await _upgradeConflictReview();
+    await _createAnalysisPreferences();
     await _protectExisting();
-  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<6)await _protectExisting();if(from<7)await _createUniversal();if(from<8)await _upgradeConflictReview();});
+  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<6)await _protectExisting();if(from<7)await _createUniversal();if(from<8)await _upgradeConflictReview();if(from<9)await _createAnalysisPreferences();});
   Future<void> _createUniversal()async{
     await customStatement('CREATE TABLE universal_outbox (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,operation_id TEXT NOT NULL,payload TEXT NOT NULL,attachment TEXT,state TEXT NOT NULL DEFAULT \'pending\',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,receipt TEXT,PRIMARY KEY(user_id,owner_id,operation_id))');
     await customStatement('CREATE TABLE incremental_mirror (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
   }
+  Future<void> _createAnalysisPreferences()=>customStatement('CREATE TABLE analysis_preferences (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
+  Future<List<Map<String,dynamic>>> readQuotes(String user,String owner,String project)async{
+    final row=await customSelect('SELECT payload FROM analysis_preferences WHERE user_id=? AND owner_id=? AND project=?',variables:[Variable.withString(user),Variable.withString(owner),Variable.withString(project)]).getSingleOrNull();
+    if(row==null)return [];
+    return (jsonDecode(_open(row.read<String>('payload'),['quotes',user,owner,project])) as List).map((r)=>Map<String,dynamic>.from(r as Map)).toList();
+  }
+  Future<void> changeQuote(String user,String owner,String project,Map<String,dynamic>? quote,String id)=>transaction(()async{
+    final rows=await readQuotes(user,owner,project);
+    rows.removeWhere((r)=>r['id']==id||(quote!=null&&r['category']==quote['category']&&r['date']==quote['date']));
+    if(quote!=null)rows.insert(0,quote);
+    await customStatement('INSERT INTO analysis_preferences(user_id,owner_id,project,payload) VALUES(?,?,?,?) ON CONFLICT(user_id,owner_id,project) DO UPDATE SET payload=excluded.payload',[user,owner,project,_seal(jsonEncode(rows.take(100).toList()),['quotes',user,owner,project])]);
+  });
   Future<void> _upgradeConflictReview()async{
     await customStatement('ALTER TABLE universal_outbox ADD COLUMN archived_from TEXT');
     await customStatement('ALTER TABLE universal_outbox ADD COLUMN resolved_by TEXT');
