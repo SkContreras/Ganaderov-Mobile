@@ -1,2 +1,20 @@
-# Paso 10 — Android: recuperación de red y piloto WorkManager
-ForegroundSync escucha connectivity_plus, reintenta al recuperar conexión mientras está activo y conserva guard de ejecución y temporizador de 30 s. Pausa timer al salir de foreground; reanuda al volver. Connectivity no garantiza acceso real a Supabase. WorkManager candidato opt-in (SYNC_BACKGROUND_V1=true y SYNC_EVENT_RPC_V1=true) registra trabajo periódico único con red disponible y 15 min mínimos; no es un horario garantizado. Callback headless deliberadamente no abre SQLite, no restaura/renueva sesión ni envía RPC: es una prueba de programación, no sincronización autónoma. Sin flag cancela el trabajo propio. No copiar tokens a inputData. Para habilitar envíos reales se requiere coordinación de sesión/refresh/logout y leases SQLite entre isolates, comprobar membresía en servidor, seguridad de datos y pruebas de Android. No usar en producción. No se añade dependencia: workmanager y connectivity_plus ya estaban declaradas. Pruebas CI y dispositivo pendientes.
+# Android: recuperación de red y WorkManager
+
+`ForegroundSync` mantiene el reintento al recuperar red, reanudar la aplicación
+y mediante su temporizador en primer plano. Connectivity no prueba por sí sola
+que Supabase sea accesible.
+
+Con `SYNC_BACKGROUND_V1=true` y `SYNC_UNIVERSAL_V1=true`, WorkManager abre la base
+cifrada y reutiliza `UniversalSync.flush`, incluidos adjuntos y dependencias.
+La ruta anterior de eventos RPC también está disponible si se compila
+`SYNC_EVENT_RPC_V1=true`. Sin un motor habilitado se cancela el trabajo propio y
+se elimina la credencial de entrega.
+
+El trabajo periódico solicita red disponible y un intervalo mínimo de quince
+minutos. Android decide cuándo ejecutarlo: no es una promesa de puntualidad, de
+ejecución tras force-stop ni de ejecución con credenciales caducadas. No se
+guardan tokens en `inputData`, logs o SQLite.
+
+La implementación y las pruebas de autorización están descritas en
+[background-delivery-v1.md](background-delivery-v1.md). Esta versión reemplaza
+la antigua prueba que sólo programaba un callback sin entregar datos.

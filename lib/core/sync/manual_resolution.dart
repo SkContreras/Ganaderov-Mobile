@@ -10,8 +10,8 @@ List<Map<String,dynamic>> resolutionFields(Map<String,dynamic> op,Map<String,dyn
  case 'animal.update':
    return (c['fields'] as Map).entries.map((e)=><String,dynamic>{'key':e.key,'local':e.value,'remote':data[e.key]}).toList();
  case 'event.update':
-   if(remote['parentId']!=c['animalId']||data['type']!='weight'||data.containsKey('journeyId'))throw StateError('Evento incompatible');
-   return [{'key':'weight','local':c['weight'],'remote':data['weight']}];
+   if(remote['parentId']!=c['animalId']||data.containsKey('journeyId')||(c.containsKey('weight')&&data['type']!='weight'))throw StateError('Evento incompatible');
+   return [for(final key in ['date','product','notes','weight'])if(c.containsKey(key)){'key':key,'local':c[key],'remote':data[key=='product'?'label':key]}];
  case 'config.update':return [{'key':'config','local':c['config'],'remote':data}];
  default:throw StateError('Revisa esta acción desde su formulario original');
  }
@@ -20,5 +20,6 @@ Map<String,dynamic> replacementOperation(Map<String,dynamic> op,Map<String,dynam
  if(!sameConflictValue(reviewed,current))throw StateError('La entidad volvió a cambiar');
  final fields=resolutionFields(op,current);
  if(selected.isEmpty||selected.toSet().length!=selected.length||selected.any((k)=>!fields.any((f)=>f['key']==k)))throw StateError('Selección inválida');
- return {...op,'operationId':id,'capturedAt':stamp,'baseRevision':current['revision'],'changes':op['action']=='animal.update'?{'fields':{for(final f in fields)if(selected.contains(f['key']))f['key']:f['local']}}:op['changes']};
+ final changes=op['changes'] as Map;
+ return {...op,'operationId':id,'capturedAt':stamp,'baseRevision':current['revision'],'changes':op['action']=='animal.update'?{'fields':{for(final f in fields)if(selected.contains(f['key']))f['key']:f['local']}}:op['action']=='event.update'?{'animalId':changes['animalId'],if(changes.containsKey('reason'))'reason':changes['reason'],for(final f in fields)if(selected.contains(f['key']))f['key']:f['local']}:op['changes']};
 }

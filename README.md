@@ -104,6 +104,15 @@ flutter test
 flutter analyze
 ```
 
+## Captura universal sin conexión
+
+El inventario, los eventos históricos, las jornadas y la configuración utilizan
+capturas locales cifradas y dependencias durables. Los borradores dependientes
+esperan los recibos confirmados para sellar su revisión antes del primer envío.
+Consulta [la guía de uso y validación](docs/universal-completion.md), incluidos
+permisos, preparación de revisiones, plazo de 24 horas y resolución de conflictos.
+La versión actual de la base local es 12.
+
 ## D4: encuadre y galería sin conexión
 
 Con `--dart-define=SYNC_UNIVERSAL_V1=true`, abre las fotografías con conexión
@@ -135,7 +144,7 @@ se procesan de uno en uno para limitar la memoria. La decodificación para mostr
 imágenes limita ambos ejes a 320 píxeles en miniaturas, 1200 en la galería/editor
 y 2048 en el visor, sin modificar los bytes originales.
 
-La base local migra a la versión 11. El contrato de operaciones compartido está
+D4 introdujo la versión 11 de la base local. El contrato de operaciones compartido está
 en `contracts/sync/v1/operation.schema.json` y contiene las mismas 20 acciones
 que Web D4. El servidor requiere las migraciones correspondientes del repositorio
 Ganaderov; estos cambios de cliente no instalan SQL ni modifican producción.

@@ -11,6 +11,7 @@ import 'package:drift_flutter/drift_flutter.dart';
 import '../../features/livestock/domain/inventory.dart';
 
 part 'photo_store.dart';
+part 'universal_drafts.dart';
 
 class OfflineStore extends GeneratedDatabase {
   OfflineStore([QueryExecutor? executor, this.cipher]):super(executor??driftDatabase(name:'ganaderov_local'));
@@ -31,7 +32,7 @@ class OfflineStore extends GeneratedDatabase {
   }
   String _scope(List<String> parts)=>jsonEncode(parts);
   Future<bool> _hasEncryptedData()async{
-    final rows=await customSelect("SELECT 1 FROM (SELECT payload FROM inventory_cache UNION ALL SELECT payload FROM event_outbox UNION ALL SELECT payload FROM universal_outbox UNION ALL SELECT payload FROM incremental_mirror UNION ALL SELECT payload FROM journey_cache UNION ALL SELECT payload FROM analysis_preferences UNION ALL SELECT payload FROM photo_metadata UNION ALL SELECT payload FROM photo_originals) WHERE payload LIKE 'gcm1:%' OR payload LIKE 'gcm2:%' LIMIT 1").get();
+    final rows=await customSelect("SELECT 1 FROM (SELECT payload FROM inventory_cache UNION ALL SELECT payload FROM event_outbox UNION ALL SELECT payload FROM universal_outbox UNION ALL SELECT payload FROM incremental_mirror UNION ALL SELECT payload FROM journey_cache UNION ALL SELECT payload FROM analysis_preferences UNION ALL SELECT payload FROM photo_metadata UNION ALL SELECT payload FROM photo_originals UNION ALL SELECT payload FROM universal_drafts UNION ALL SELECT payload FROM entity_revisions) WHERE payload LIKE 'gcm1:%' OR payload LIKE 'gcm2:%' LIMIT 1").get();
     return rows.isNotEmpty;
   }
   String _seal(String text,List<String> parts){
@@ -51,7 +52,7 @@ class OfflineStore extends GeneratedDatabase {
     return text;
   }
   List<String> _eventScope(String user,String owner,String event,String field)=>['outbox',user,owner,event,field];
-  @override int get schemaVersion=>11;
+  @override int get schemaVersion=>12;
   @override Iterable<TableInfo<Table,Object?>> get allTables=>const [];
   @override List<DatabaseSchemaEntity> get allSchemaEntities=>const [];
   @override MigrationStrategy get migration=>MigrationStrategy(onCreate:(_)async{
@@ -64,8 +65,9 @@ class OfflineStore extends GeneratedDatabase {
     await _createAnalysisPreferences();
     await _createJourneyCache();
     await _createPhotoCache();
+    await _createUniversalDrafts();
     await _protectExisting();
-  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<6)await _protectExisting();if(from<7)await _createUniversal();if(from<8)await _upgradeConflictReview();if(from<9)await _createAnalysisPreferences();if(from<10)await _createJourneyCache();if(from<11)await _createPhotoCache();});
+  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<6)await _protectExisting();if(from<7)await _createUniversal();if(from<8)await _upgradeConflictReview();if(from<9)await _createAnalysisPreferences();if(from<10)await _createJourneyCache();if(from<11)await _createPhotoCache();if(from<12)await _createUniversalDrafts();});
   Future<void> _createUniversal()async{
     await customStatement('CREATE TABLE universal_outbox (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,operation_id TEXT NOT NULL,payload TEXT NOT NULL,attachment TEXT,state TEXT NOT NULL DEFAULT \'pending\',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,receipt TEXT,PRIMARY KEY(user_id,owner_id,operation_id))');
     await customStatement('CREATE TABLE incremental_mirror (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
@@ -117,6 +119,7 @@ class OfflineStore extends GeneratedDatabase {
       if(old==null||!['conflict','rejected','archived'].contains(old.read<String>('state'))||old.readNullable<String>('resolved_by')!=null||_open(old.read<String>('payload'),['universal',user,owner,original])!=jsonEncode(expected))throw StateError('La operación cambió');
       if(replacement['operationId']==original||replacement['ownerId']!=owner||replacement['entityId']!=expected['entityId']||replacement['action']!=expected['action'])throw StateError('Resolución inválida');
       await enqueueUniversal(user,owner,replacement);
+      if(project!=null&&!(replacement['action'] as String).startsWith('photo.'))await captureUniversalDraft(user,owner,project,replacement);
       await customStatement("UPDATE universal_outbox SET resolves=? WHERE user_id=? AND owner_id=? AND operation_id=?",[original,user,owner,replacement['operationId']]);
       await customStatement("UPDATE universal_outbox SET archived_from=state,state='archived',resolved_by=? WHERE user_id=? AND owner_id=? AND operation_id=?",[replacement['operationId'],user,owner,original]);
       if((replacement['action'] as String).startsWith('photo.')){
@@ -231,10 +234,10 @@ class OfflineStore extends GeneratedDatabase {
     s.animals;
     return s;
   }
-  Future<void> purge(String userId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id=?',[userId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id=?',[userId]);await customStatement('DELETE FROM journey_cache WHERE user_id=?',[userId]);await _purgePhotoCache('user_id=?',[userId]);});
-  Future<void> purgeAll()=>transaction(()async{await customStatement('DELETE FROM inventory_cache');await customStatement('DELETE FROM incremental_mirror');await customStatement('DELETE FROM journey_cache');await _purgePhotoCache('1=1',[]);});
-  Future<void> retainOnly(String userId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id<>?',[userId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id<>?',[userId]);await customStatement('DELETE FROM journey_cache WHERE user_id<>?',[userId]);await _purgePhotoCache('user_id<>?',[userId]);});
-  Future<void> invalidateOtherRanch(String userId,String ownerId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await customStatement('DELETE FROM journey_cache WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await _purgePhotoCache('user_id=? AND owner_id<>?',[userId,ownerId]);});
+  Future<void> purge(String userId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id=?',[userId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id=?',[userId]);await customStatement('DELETE FROM journey_cache WHERE user_id=?',[userId]);await _purgePhotoCache('user_id=?',[userId]);await customStatement('DELETE FROM entity_revisions WHERE user_id=?',[userId]);});
+  Future<void> purgeAll()=>transaction(()async{await customStatement('DELETE FROM inventory_cache');await customStatement('DELETE FROM incremental_mirror');await customStatement('DELETE FROM journey_cache');await _purgePhotoCache('1=1',[]);await customStatement('DELETE FROM entity_revisions');});
+  Future<void> retainOnly(String userId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id<>?',[userId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id<>?',[userId]);await customStatement('DELETE FROM journey_cache WHERE user_id<>?',[userId]);await _purgePhotoCache('user_id<>?',[userId]);await customStatement('DELETE FROM entity_revisions WHERE user_id<>?',[userId]);});
+  Future<void> invalidateOtherRanch(String userId,String ownerId)=>transaction(()async{await customStatement('DELETE FROM inventory_cache WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await customStatement('DELETE FROM incremental_mirror WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await customStatement('DELETE FROM journey_cache WHERE user_id=? AND owner_id<>?',[userId,ownerId]);await _purgePhotoCache('user_id=? AND owner_id<>?',[userId,ownerId]);await customStatement('DELETE FROM entity_revisions WHERE user_id=? AND owner_id<>?',[userId,ownerId]);});
 
   Future<void> enqueue(PendingEvent p,{bool rpc=false})async{
     p.draft.validate();

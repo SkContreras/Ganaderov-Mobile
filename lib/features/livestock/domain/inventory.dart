@@ -1,5 +1,9 @@
 class AnimalEvent {
-  const AnimalEvent({required this.type, required this.date, this.weight, this.notes = '', this.product = '', this.actor = '', this.createdAt});
+  const AnimalEvent({required this.type, required this.date, this.id='',this.raw=const {},this.syncState,this.weight, this.notes = '', this.product = '', this.actor = '', this.createdAt});
+  final String id;
+  final Map<String,dynamic> raw;
+  final String? syncState;
+  bool get fromJourney=>raw['journeyId']!=null;
   final String type, notes, product, actor;
   final DateTime? createdAt;
   final DateTime? date;
@@ -13,7 +17,8 @@ class AnimalEvent {
 }
 
 class InventoryAnimal {
-  const InventoryAnimal({required this.id, required this.fields, required this.active, required this.statusLabel, required this.events});
+  const InventoryAnimal({required this.id, required this.fields, required this.active, required this.statusLabel, required this.events,this.syncState,this.historyState});
+  final String? syncState,historyState;
   final String id, statusLabel;
   final Map<String, dynamic> fields;
   final bool active;
@@ -43,7 +48,7 @@ class InventoryAnimal {
 }
 
 class InventorySnapshot {
-  const InventorySnapshot({required this.status, this.ranchName = '', this.role = '', this.records = const [], this.statusOptions = const {}, this.statusLabels = const {}, this.config = const {}, this.ownerId = '', this.userId = '', this.configRevision = 0, this.offline = false, this.cachedAt, this.photoSyncStates = const {}});
+  const InventorySnapshot({required this.status, this.ranchName = '', this.role = '', this.records = const [], this.statusOptions = const {}, this.statusLabels = const {}, this.config = const {}, this.ownerId = '', this.userId = '', this.configRevision = 0, this.offline = false, this.cachedAt, this.photoSyncStates = const {},this.operationStates=const {},this.offlineWritesEnabled=false});
   final String status, ranchName, role, ownerId, userId;
   final Map<String, dynamic> config;
   final int configRevision;
@@ -51,7 +56,15 @@ class InventorySnapshot {
   final DateTime? cachedAt;
   // Presentation only. Pending operations never become the authoritative cache.
   final Map<String, String> photoSyncStates;
+  final Map<String,String> operationStates;
+  final bool offlineWritesEnabled;
   bool get canManage => !offline && status == 'active' && (role == 'owner' || role == 'admin');
+  bool get canCaptureAnimals {
+    if(status!='active'||!['owner','admin'].contains(role))return false;
+    if(!offline)return true;
+    final age=cachedAt==null?null:DateTime.now().difference(cachedAt!);
+    return offlineWritesEnabled&&age!=null&&!age.isNegative&&age<=const Duration(hours:24);
+  }
   final List<Map<String, dynamic>> records;
   final Map<String, bool> statusOptions;
   final Map<String, String> statusLabels;
@@ -75,6 +88,7 @@ class InventorySnapshot {
           if (event['animalId'] != id || event['type'] is! String) continue;
           final weight = double.tryParse(event['weight']?.toString() ?? '');
           history.add(AnimalEvent(
+            id:event['id']?.toString()??'',raw:Map<String,dynamic>.unmodifiable(event),syncState:operationStates['event:${event['id']}'],
             type: event['type'] as String,
             date: DateTime.tryParse(event['date']?.toString() ?? '') ?? DateTime.tryParse(event['performedAt']?.toString() ?? ''),
             weight: weight != null && weight.isFinite && weight >= 0 ? weight : null,
@@ -89,7 +103,7 @@ class InventorySnapshot {
         final day=(b.date??DateTime(1900)).compareTo(a.date??DateTime(1900));
         return day!=0?day:(b.createdAt??DateTime(1900)).compareTo(a.createdAt??DateTime(1900));
       });
-      result.add(InventoryAnimal(id: id, fields: Map.unmodifiable(fields), active: statusOptions[status] ?? !inactive.contains(status), statusLabel: statusLabels[status] ?? labels[status] ?? (status.isEmpty ? 'Sin estado' : status), events: List.unmodifiable(history)));
+      result.add(InventoryAnimal(id: id, fields: Map.unmodifiable(fields), active: statusOptions[status] ?? !inactive.contains(status), statusLabel: statusLabels[status] ?? labels[status] ?? (status.isEmpty ? 'Sin estado' : status), events: List.unmodifiable(history),syncState:operationStates['animal:$id'],historyState:operationStates['history:$id']));
     }
     result.sort((a,b) {
       final aTag = a.value('tag'), bTag = b.value('tag');
@@ -106,7 +120,13 @@ abstract interface class AnimalLifecycleWriter {
 }
 
 abstract interface class AnimalWriter {
-  Future<void> saveAnimal(InventorySnapshot original, String? id, Map<String, dynamic> changes);
+  Future<void> saveAnimal(InventorySnapshot original, String? id, Map<String, dynamic> changes,{String? operationId,String? createId});
+}
+
+abstract interface class OfflineInventory {
+  bool get supportsOfflineInventory;
+  Future<InventorySnapshot> refreshLocalInventory(InventorySnapshot snapshot);
+  Future<void> prepareOfflineInventory(InventorySnapshot snapshot);
 }
 
 abstract interface class InventoryRepository {

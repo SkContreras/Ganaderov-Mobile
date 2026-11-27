@@ -42,7 +42,7 @@ class _EventEditorState extends State<EventEditor>{
         Text('Arete: ${widget.animal.value('tag')}'),
         const SizedBox(height:20),
         const Text('Se guardará primero en el dispositivo y se enviará cuando haya conexión.'),
-        DropdownButtonFormField<String>(initialValue:_type,decoration:const InputDecoration(labelText:'Tipo de registro',border:OutlineInputBorder()),items:[for(final e in eventTypes.entries)DropdownMenuItem(value:e.key,child:Text(e.value))],onChanged:locked?null:(v)=>setState(()=>_type=v!)),
+        DropdownButtonFormField<String>(initialValue:_type,decoration:const InputDecoration(labelText:'Tipo de registro',border:OutlineInputBorder()),items:[for(final e in eventTypes.entries)if(!['note','other'].contains(e.key)||['owner','admin'].contains(widget.snapshot.role))DropdownMenuItem(value:e.key,child:Text(e.value))],onChanged:locked?null:(v)=>setState(()=>_type=v!)),
         const SizedBox(height:16),
         OutlinedButton.icon(onPressed:locked?null:()async{
           final value=await showDatePicker(context:context,initialDate:_date,firstDate:DateTime(1900),lastDate:DateTime.now());
@@ -52,7 +52,7 @@ class _EventEditorState extends State<EventEditor>{
         if(_type=='weight')TextFormField(controller:_weight,enabled:!locked,keyboardType:const TextInputType.numberWithOptions(decimal:true),decoration:const InputDecoration(labelText:'Peso (kg)',border:OutlineInputBorder()),validator:(v){final n=double.tryParse((v??'').trim().replaceAll(',','.'));return n==null||!n.isFinite||n<0||n>100000?'Introduce un peso válido':null;})
         else TextFormField(controller:_product,enabled:!locked,maxLength:120,decoration:const InputDecoration(labelText:'Producto o tratamiento (opcional)',border:OutlineInputBorder())),
         const SizedBox(height:16),
-        TextFormField(controller:_notes,enabled:!locked,maxLines:3,maxLength:2000,decoration:const InputDecoration(labelText:'Observaciones',border:OutlineInputBorder())),
+        TextFormField(controller:_notes,enabled:!locked,maxLines:3,maxLength:2000,decoration:const InputDecoration(labelText:'Observaciones',border:OutlineInputBorder()),validator:(value)=>_type=='note'&&(value??'').trim().isEmpty?'Escribe la observación':null),
         if(_error!=null)Text(_error!,style:TextStyle(color:Theme.of(context).colorScheme.error)),
         const SizedBox(height:12),
         FilledButton(onPressed:_busy?null:_save,child:Text(_busy?'Guardando…':_uncertain?'Reintentar guardado':'Guardar registro')),

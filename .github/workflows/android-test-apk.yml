@@ -20,7 +20,7 @@ permissions:
 
 env:
   # The APK records this exact reviewed migration/harness revision.
-  WEB_BACKEND_REF: 5dbf76fe1c5beae2b1083875dced7f905f930709
+  WEB_BACKEND_REF: d5e9119d6e22dfe036f647127c5207e6a623eb6e
 
 concurrency:
   group: android-test-apk-${{ github.ref }}
@@ -55,7 +55,7 @@ jobs:
         run: |
           supabase init
           python3 ../tool/configure_local_supabase.py supabase/config.toml
-          supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor,realtime,inbucket
+          supabase start -x studio,imgproxy,logflare,vector,supavisor,realtime,inbucket
           umask 077
           supabase status -o json > "$RUNNER_TEMP/d4-supabase-status.json"
       - name: Install reviewed backend migrations in the disposable database
@@ -73,12 +73,28 @@ jobs:
             psql -X -v ON_ERROR_STOP=1 -f "$sql"
           done < "$RUNNER_TEMP/d4-migrations.txt"
           psql -X -v ON_ERROR_STOP=1 -c "NOTIFY pgrst, 'reload schema';"
-      - name: Validate real Auth, RLS, RPC and Storage before enabling D4
+      - name: Validate real Auth, RLS, RPC, Storage and photo gateway before enabling D4
         if: github.event_name == 'push'
+        working-directory: backend-source
         env:
           GANADEROV_DISPOSABLE_DB: 'YES'
           GANADEROV_SUPABASE_STATUS: ${{ runner.temp }}/d4-supabase-status.json
-        run: python3 backend-source/tests/integration/http_e2e.py --keep-fixtures --output "$RUNNER_TEMP/d4-http"
+        run: |
+          umask 077
+          supabase functions serve sync-background-photo --no-verify-jwt > "$RUNNER_TEMP/d4-background-photo.private.log" 2>&1 &
+          python3 - <<'PY'
+          import json, os, time, urllib.request, urllib.error
+          status=json.load(open(os.environ['GANADEROV_SUPABASE_STATUS']))
+          for attempt in range(60):
+              try:
+                  request=urllib.request.Request(status['API_URL']+'/functions/v1/sync-background-photo',method='OPTIONS',headers={'apikey':status['ANON_KEY']})
+                  with urllib.request.urlopen(request,timeout=3) as response:
+                      if response.status==204: break
+              except (urllib.error.URLError, TimeoutError): pass
+              time.sleep(1)
+          else: raise SystemExit('The isolated photo gateway did not become ready')
+          PY
+          python3 tests/integration/http_e2e.py --keep-fixtures --output "$RUNNER_TEMP/d4-http"
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.50.1'
@@ -126,7 +142,7 @@ jobs:
         if: always()
         run: |
           rm -f "$RUNNER_TEMP/d4-test-defines.json" "$RUNNER_TEMP/d4-supabase-status.json"
-          rm -f "$RUNNER_TEMP/d4-http/fixtures.private.json"
+          rm -f "$RUNNER_TEMP/d4-http/fixtures.private.json" "$RUNNER_TEMP/d4-background-photo.private.log"
       - name: Stop the disposable backend
         if: always() && github.event_name == 'push' && (steps.backend.outcome == 'success' || steps.backend.outcome == 'failure')
         working-directory: backend-source

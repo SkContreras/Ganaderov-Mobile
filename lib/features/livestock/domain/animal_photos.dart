@@ -116,5 +116,6 @@ InventorySnapshot projectPhotoChanges(
     config: snapshot.config, ownerId: snapshot.ownerId, userId: snapshot.userId,
     configRevision: snapshot.configRevision, offline: snapshot.offline,
     cachedAt: snapshot.cachedAt, photoSyncStates: states,
+    operationStates:snapshot.operationStates,offlineWritesEnabled:snapshot.offlineWritesEnabled,
   );
 }
