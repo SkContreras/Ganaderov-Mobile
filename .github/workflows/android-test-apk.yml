@@ -1,0 +1,133 @@
+name: Android test APK
+
+on:
+  push:
+    branches: [feat/d4-test-apk]
+  workflow_dispatch:
+    inputs:
+      client_config:
+        description: 'JSON cliente del backend verificado: profile, url, publishableKey, backendReady y projectRef opcional. Nunca claves secret/service_role.'
+        required: true
+        type: string
+      enable_d4_sync:
+        description: 'Activar D4 únicamente después de aprobar el harness del backend desechable.'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  # The APK records this exact reviewed migration/harness revision.
+  WEB_BACKEND_REF: 5dbf76fe1c5beae2b1083875dced7f905f930709
+
+concurrency:
+  group: android-test-apk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Require a pinned backend revision
+        if: github.event_name == 'push'
+        run: python3 -c 'import os,re; assert re.fullmatch(r"[0-9a-f]{40}",os.environ["WEB_BACKEND_REF"]), "Pin the reviewed Web backend commit before building an APK"'
+      - uses: actions/checkout@v7
+        if: github.event_name == 'push'
+        with:
+          repository: SkContreras/Ganaderov
+          ref: ${{ env.WEB_BACKEND_REF }}
+          path: backend-source
+          persist-credentials: false
+      - uses: supabase/setup-cli@v1
+        if: github.event_name == 'push'
+        with:
+          version: 2.75.0
+      - name: Start an isolated Supabase for the APK configuration
+        id: backend
+        if: github.event_name == 'push'
+        working-directory: backend-source
+        run: |
+          supabase init
+          python3 ../tool/configure_local_supabase.py supabase/config.toml
+          supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor,realtime,inbucket
+          umask 077
+          supabase status -o json > "$RUNNER_TEMP/d4-supabase-status.json"
+      - name: Install reviewed backend migrations in the disposable database
+        if: github.event_name == 'push'
+        working-directory: backend-source
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '54322'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+        run: |
+          python3 scripts/check-backend-release.py --paths --include-base > "$RUNNER_TEMP/d4-migrations.txt"
+          while IFS= read -r sql; do
+            psql -X -v ON_ERROR_STOP=1 -f "$sql"
+          done < "$RUNNER_TEMP/d4-migrations.txt"
+          psql -X -v ON_ERROR_STOP=1 -c "NOTIFY pgrst, 'reload schema';"
+      - name: Validate real Auth, RLS, RPC and Storage before enabling D4
+        if: github.event_name == 'push'
+        env:
+          GANADEROV_DISPOSABLE_DB: 'YES'
+          GANADEROV_SUPABASE_STATUS: ${{ runner.temp }}/d4-supabase-status.json
+        run: python3 backend-source/tests/integration/http_e2e.py --keep-fixtures --output "$RUNNER_TEMP/d4-http"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.50.1'
+          channel: stable
+          cache: true
+      - name: Restore locked Dart dependencies
+        run: flutter pub get --enforce-lockfile
+      - name: Validate disposable backend and prepare client configuration
+        env:
+          D4_CLIENT_CONFIG: ${{ github.event_name == 'workflow_dispatch' && inputs.client_config || '' }}
+          D4_CLIENT_CONFIG_FILE: ${{ github.event_name == 'push' && format('{0}/d4-http/client-config.json', runner.temp) || '' }}
+          ENABLE_D4_SYNC: ${{ github.event_name == 'push' || inputs.enable_d4_sync }}
+        run: |
+          umask 077
+          dart run tool/prepare_test_apk.dart "$RUNNER_TEMP/d4-test-defines.json" "$RUNNER_TEMP/d4-build-info.json"
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+      - name: Install pinned Android packages and system SQLite
+        run: |
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev
+      - name: Validate client and run tests
+        run: |
+          flutter analyze --no-pub --no-fatal-infos
+          flutter test --no-pub
+      - name: Build isolated debug APK
+        run: |
+          flutter build apk --debug --flavor d4test --no-pub --build-number "$GITHUB_RUN_NUMBER" --dart-define-from-file "$RUNNER_TEMP/d4-test-defines.json"
+      - name: Verify installable package and collect artifact
+        run: python3 tool/package_test_apk.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ganaderov-d4test-${{ github.run_number }}-${{ github.sha }}
+          path: build/test-apk/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Remove temporary client configuration
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/d4-test-defines.json" "$RUNNER_TEMP/d4-supabase-status.json"
+          rm -f "$RUNNER_TEMP/d4-http/fixtures.private.json"
+      - name: Stop the disposable backend
+        if: always() && github.event_name == 'push' && (steps.backend.outcome == 'success' || steps.backend.outcome == 'failure')
+        working-directory: backend-source
+        run: supabase stop --no-backup
