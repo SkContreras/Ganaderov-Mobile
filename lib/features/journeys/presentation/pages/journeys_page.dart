@@ -1,6 +1,8 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
+
+import '../../../../core/widgets/ranch_illustration.dart';
 import '../../../auth/domain/auth_gateway.dart';
 import '../../../livestock/domain/inventory.dart';
 import '../../../livestock/domain/event_draft.dart';
@@ -106,6 +108,11 @@ class _JourneysPageState extends State<JourneysPage>{
     return SafeArea(top:false,child:RefreshIndicator(onRefresh:_load,child:ListView(
       physics:const AlwaysScrollableScrollPhysics(),padding:const EdgeInsets.all(20),children:[
       Row(children:[Expanded(child:Text('Jornadas de campo',style:Theme.of(context).textTheme.headlineSmall)),IconButton(tooltip:'Actualizar jornadas',onPressed:_busy||_loading?null:_load,icon:const Icon(Icons.refresh))]),
+      if (selected == null)
+        const Padding(
+          padding: EdgeInsets.only(bottom: 12),
+          child: RanchIllustration('ranch-journeys'),
+        ),
       if(_loading||_busy)const LinearProgressIndicator(),
       if(_error!=null)Text(_error!,style:TextStyle(color:Theme.of(context).colorScheme.error)),
       if(!_loading&&_snapshot!=null&&_snapshot!.status!='active')const Text('Necesitas pertenecer a un rancho activo.'),

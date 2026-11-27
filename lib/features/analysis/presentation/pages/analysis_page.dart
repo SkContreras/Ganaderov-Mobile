@@ -2,6 +2,8 @@ import 'dart:math' as math;
 import 'package:uuid/uuid.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:intl/intl.dart';
+
+import '../../../../core/widgets/ranch_illustration.dart';
 import '../../../auth/domain/auth_gateway.dart';
 import '../../../livestock/domain/inventory.dart';
 import '../../domain/productive_analysis.dart';
@@ -54,6 +56,10 @@ class _AnalysisPageState extends State<AnalysisPage>{
     final forecasts=animal==null||_snapshot==null?<ForecastView>[]:savedForecasts(_snapshot!,animal.id);
     return SafeArea(top:false,child:RefreshIndicator(onRefresh:_load,child:ListView(physics:const AlwaysScrollableScrollPhysics(),padding:const EdgeInsets.all(20),children:[
       Row(children:[Expanded(child:Text('Análisis ganadero',style:Theme.of(context).textTheme.headlineSmall)),IconButton(tooltip:'Actualizar análisis',onPressed:_loading?null:_load,icon:const Icon(Icons.refresh))]),
+      const Padding(
+        padding: EdgeInsets.only(bottom: 12),
+        child: RanchIllustration('ranch-analysis', aspectRatio: 2.33),
+      ),
       if(_loading)const LinearProgressIndicator(),
       if(_failed)const Text('No se pudieron consultar los datos. Actualiza para reintentar.'),
       if(_snapshot!=null&&_snapshot!.status!='active')const Text('Necesitas pertenecer a un rancho activo.'),

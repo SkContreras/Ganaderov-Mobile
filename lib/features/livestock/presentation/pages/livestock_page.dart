@@ -1,8 +1,10 @@
 import 'dart:async';
 
+
 import 'package:material_ui/material_ui.dart';
 import 'package:intl/intl.dart';
 
+import '../../../../core/widgets/ranch_illustration.dart';
 import '../../../auth/domain/auth_gateway.dart';
 import '../../domain/inventory.dart';
 import '../../domain/animal_form_config.dart';
@@ -559,6 +561,19 @@ class _LivestockPageState extends State<LivestockPage> {
                         '${filtered.length} animales',
                         style: theme.textTheme.bodySmall,
                       ),
+                      if (_animals.isEmpty && !_archived && _query.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 16),
+                          child: Center(
+                            child: SizedBox(
+                              width: 180,
+                              child: RanchIllustration(
+                                'ranch-inventory-empty',
+                                aspectRatio: 190 / 84,
+                              ),
+                            ),
+                          ),
+                        ),
                       if (filtered.isEmpty)
                         const Padding(
                           padding: EdgeInsets.symmetric(vertical: 24),
