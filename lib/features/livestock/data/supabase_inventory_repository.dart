@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'dart:convert';
 import '../../../core/sync/universal_sync.dart';
+import '../../../core/sync/manual_resolution.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -16,7 +17,7 @@ import '../domain/event_draft.dart';
 import '../domain/animal_form_config.dart';
 import 'package:uuid/uuid.dart';
 
-class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalLifecycleWriter, AnimalPhotos, AnimalPhotoRemoval, AnimalEventWriter, JourneyRepository, OutboxAccess {
+class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, AnimalLifecycleWriter, AnimalPhotos, AnimalPhotoRemoval, AnimalEventWriter, JourneyRepository, OutboxAccess, ConflictAccess {
   SupabaseInventoryRepository(this.client,{this.store,this.onSynced,this.eventRpcEnabled=false,this.journeyRpcEnabled=false,this.universalEnabled=false,this.incrementalEnabled=false,this.project=''});
   final bool universalEnabled,incrementalEnabled;
   final String project;
@@ -35,6 +36,42 @@ class SupabaseInventoryRepository implements InventoryRepository, AnimalWriter, 
     if(a is Map&&b is Map)return a.length==b.length&&a.keys.every((k)=>b.containsKey(k)&&_sameJson(a[k],b[k]));
     if(a is List&&b is List)return a.length==b.length&&List.generate(a.length,(i)=>_sameJson(a[i],b[i])).every((v)=>v);
     return a==b;
+  }
+  Future<(String,String)> _reviewScope()async{
+    final user=client.auth.currentUser?.id;
+    if(user==null||client.auth.currentSession==null||store==null)throw StateError('Sesión no disponible');
+    final raw=await client.rpc('get_my_ranch_context');
+    if(client.auth.currentUser?.id!=user||raw is! Map||raw['status']!='active'||raw['owner_id'] is! String)throw StateError('Membresía no disponible');
+    return (user,raw['owner_id'] as String);
+  }
+  @override Future<List<Map<String,dynamic>>> reviewOperations()async{
+    if(!universalEnabled)return [];
+    final (user,owner)=await _reviewScope();
+    final rows=await store!.reviewUniversal(user,owner);
+    _universal.verify(user);
+    return rows.map((r)=>{...r,'reviewUser':user,'reviewOwner':owner}).toList();
+  }
+  void _verifyEntry(Map<String,dynamic> entry,String user,String owner){
+    if(entry['reviewUser']!=user||entry['reviewOwner']!=owner||(entry['operation'] as Map)['ownerId']!=owner)throw StateError('Ámbito modificado');
+  }
+  @override Future<Map<String,dynamic>> currentConflictEntity(Map<String,dynamic> entry)async{
+    final (user,owner)=await _reviewScope();_verifyEntry(entry,user,owner);
+    final op=Map<String,dynamic>.from(entry['operation'] as Map);
+    return _universal.entity(user,owner,(op['action'] as String).split('.').first,op['entityId'] as String);
+  }
+  @override Future<void> archiveOperation(Map<String,dynamic> entry,bool archive)async{
+    final (user,owner)=await _reviewScope();_verifyEntry(entry,user,owner);
+    await store!.archiveUniversal(user,owner,entry['id'] as String,archive);
+  }
+  @override Future<void> resolveOperation(Map<String,dynamic> entry,Map<String,dynamic> reviewed,List<String> selected)async{
+    if(!universalEnabled)throw StateError('Motor universal desactivado');
+    final (user,owner)=await _reviewScope();_verifyEntry(entry,user,owner);
+    final op=Map<String,dynamic>.from(entry['operation'] as Map);
+    final current=await _universal.entity(user,owner,(op['action'] as String).split('.').first,op['entityId'] as String);
+    final replacement=replacementOperation(op,reviewed,current,selected,const Uuid().v4(),DateTime.now().toUtc().toIso8601String());
+    _universal.verify(user);
+    await store!.replaceConflict(user,owner,entry['id'] as String,op,replacement);
+    unawaited(syncEvents().catchError((Object _){}));
   }
   final bool journeyRpcEnabled;
   @override bool get supportsJourneyResume=>journeyRpcEnabled;

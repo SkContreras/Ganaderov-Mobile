@@ -48,7 +48,7 @@ class OfflineStore extends GeneratedDatabase {
     return text;
   }
   List<String> _eventScope(String user,String owner,String event,String field)=>['outbox',user,owner,event,field];
-  @override int get schemaVersion=>7;
+  @override int get schemaVersion=>8;
   @override Iterable<TableInfo<Table,Object?>> get allTables=>const [];
   @override List<DatabaseSchemaEntity> get allSchemaEntities=>const [];
   @override MigrationStrategy get migration=>MigrationStrategy(onCreate:(_)async{
@@ -57,11 +57,42 @@ class OfflineStore extends GeneratedDatabase {
     await _upgradeProtocol();
     await _createDeliveryLease();
     await _createUniversal();
+    await _upgradeConflictReview();
     await _protectExisting();
-  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<6)await _protectExisting();if(from<7)await _createUniversal();});
+  },onUpgrade:(m,from,to)async{if(from<2)await _createOutbox();if(from<3)await _upgradeProtocol();if(from<4)await _createDeliveryLease();if(from<6)await _protectExisting();if(from<7)await _createUniversal();if(from<8)await _upgradeConflictReview();});
   Future<void> _createUniversal()async{
     await customStatement('CREATE TABLE universal_outbox (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,operation_id TEXT NOT NULL,payload TEXT NOT NULL,attachment TEXT,state TEXT NOT NULL DEFAULT \'pending\',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,receipt TEXT,PRIMARY KEY(user_id,owner_id,operation_id))');
     await customStatement('CREATE TABLE incremental_mirror (user_id TEXT NOT NULL,owner_id TEXT NOT NULL,project TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,owner_id,project))');
+  }
+  Future<void> _upgradeConflictReview()async{
+    await customStatement('ALTER TABLE universal_outbox ADD COLUMN archived_from TEXT');
+    await customStatement('ALTER TABLE universal_outbox ADD COLUMN resolved_by TEXT');
+    await customStatement('ALTER TABLE universal_outbox ADD COLUMN resolves TEXT');
+    await customStatement('ALTER TABLE event_outbox ADD COLUMN archived_from TEXT');
+  }
+  Future<List<Map<String,dynamic>>> reviewUniversal(String user,String owner)async{
+    final rows=await customSelect("SELECT operation_id,payload,state,receipt,archived_from,resolved_by,resolves FROM universal_outbox WHERE user_id=? AND owner_id=? AND state IN ('conflict','rejected','archived','pending') ORDER BY rowid DESC LIMIT 200",variables:[Variable.withString(user),Variable.withString(owner)]).get();
+    return rows.map((row){
+      final id=row.read<String>('operation_id'),scope=['universal',user,owner,row.read<String>('operation_id')],receipt=row.readNullable<String>('receipt');
+      return <String,dynamic>{'id':id,'operation':jsonDecode(_open(row.read<String>('payload'),scope)),'state':row.read<String>('state'),'receipt':receipt==null?null:jsonDecode(_open(receipt,[...scope,'receipt'])),'archivedFrom':row.readNullable<String>('archived_from'),'resolvedBy':row.readNullable<String>('resolved_by'),'resolves':row.readNullable<String>('resolves')};
+    }).toList();
+  }
+  Future<void> archiveUniversal(String user,String owner,String id,bool archive)async{
+    if(archive){
+      await customStatement("UPDATE universal_outbox SET archived_from=state,state='archived' WHERE user_id=? AND owner_id=? AND operation_id=? AND state IN ('conflict','rejected') AND resolved_by IS NULL",[user,owner,id]);
+    }else{
+      await customStatement("UPDATE universal_outbox SET state=archived_from WHERE user_id=? AND owner_id=? AND operation_id=? AND state='archived' AND archived_from IN ('conflict','rejected') AND resolved_by IS NULL",[user,owner,id]);
+    }
+  }
+  Future<void> replaceConflict(String user,String owner,String original,Map<String,dynamic> expected,Map<String,dynamic> replacement)async{
+    await transaction(()async{
+      final old=await customSelect("SELECT payload,state,resolved_by FROM universal_outbox WHERE user_id=? AND owner_id=? AND operation_id=?",variables:[Variable.withString(user),Variable.withString(owner),Variable.withString(original)]).getSingleOrNull();
+      if(old==null||!['conflict','rejected','archived'].contains(old.read<String>('state'))||old.readNullable<String>('resolved_by')!=null||_open(old.read<String>('payload'),['universal',user,owner,original])!=jsonEncode(expected))throw StateError('La operación cambió');
+      if(replacement['operationId']==original||replacement['ownerId']!=owner||replacement['entityId']!=expected['entityId']||replacement['action']!=expected['action'])throw StateError('Resolución inválida');
+      await enqueueUniversal(user,owner,replacement);
+      await customStatement("UPDATE universal_outbox SET resolves=? WHERE user_id=? AND owner_id=? AND operation_id=?",[original,user,owner,replacement['operationId']]);
+      await customStatement("UPDATE universal_outbox SET archived_from=state,state='archived',resolved_by=? WHERE user_id=? AND owner_id=? AND operation_id=?",[replacement['operationId'],user,owner,original]);
+    });
   }
   Future<String> installationId()=>_deviceId();
   Future<void> enqueueUniversal(String user,String owner,Map<String,dynamic> operation,{String? attachment})async{
