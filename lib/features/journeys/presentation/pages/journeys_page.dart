@@ -16,6 +16,10 @@ class JourneysPage extends StatefulWidget {
 class _JourneysPageState extends State<JourneysPage>{
   InventorySnapshot? _snapshot;
   List<Journey> _items=[];
+  Map<String,Set<String>> _pending={};
+  ExtendedJourneyRepository? get extended=>repository is ExtendedJourneyRepository?repository as ExtendedJourneyRepository:null;
+  bool get offlineEnabled=>extended?.supportsOfflineJourneys==true;
+  bool get manager=>['owner','admin'].contains(_snapshot?.role);
   String? _selected;
   String _query='',_filter='all';
   bool _loading=false,_busy=false;
@@ -36,9 +40,11 @@ class _JourneysPageState extends State<JourneysPage>{
     setState((){_loading=true;_error=null;_snapshot=null;_items=[];});
     try{
       final snapshot=await widget.inventory.load();
-      final items=snapshot.status=='active'&&!snapshot.offline?await repo.journeys(snapshot):<Journey>[];
+      final items=snapshot.status=='active'&&(!snapshot.offline||offlineEnabled)?await repo.journeys(snapshot):<Journey>[];
+      final pending=<String,Set<String>>{};
+      if(offlineEnabled)for(final j in items){pending[j.id]=await extended!.pendingJourneyAnimals(snapshot,j.id);}
       if(!mounted||request!=_request||!widget.auth.signedIn)return;
-      setState((){_snapshot=snapshot;_items=items;});
+      setState((){_snapshot=snapshot;_items=items;_pending=pending;});
     }catch(_){if(mounted&&request==_request)setState(()=>_error='No se pudieron consultar las jornadas.');}
     finally{if(mounted&&request==_request)setState(()=>_loading=false);}
   }
@@ -66,6 +72,13 @@ class _JourneysPageState extends State<JourneysPage>{
     }
     await _run(()=>repo.attendJourney(snapshot,j,animal['id'] as String,weight));
   }
+  Future<void> _addAnimals(Journey j)async{
+    final s=_snapshot,repo=extended;
+    if(s==null||repo==null)return;
+    final options=s.animals.where((a)=>a.active&&!j.roster.any((r)=>r['id']==a.id)).toList(),selected=<String>{};
+    final ids=await showDialog<Set<String>>(context:context,builder:(context)=>StatefulBuilder(builder:(context,update)=>AlertDialog(title:const Text('Agregar animales'),content:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[for(final a in options)CheckboxListTile(value:selected.contains(a.id),title:Text(a.title),onChanged:(v)=>update((){if(v==true){selected.add(a.id);}else{selected.remove(a.id);}}))])),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text('Cancelar')),FilledButton(onPressed:selected.isEmpty?null:()=>Navigator.pop(context,selected),child:const Text('Agregar'))])));
+    if(ids!=null&&mounted)await _run(()=>repo.addJourneyAnimals(s,j,ids));
+  }
   Future<void> _finish(Journey j)async{
     final s=_snapshot,repo=repository;
     if(s==null||repo==null||!s.canManage)return;
@@ -86,8 +99,8 @@ class _JourneysPageState extends State<JourneysPage>{
       if(_loading||_busy)const LinearProgressIndicator(),
       if(_error!=null)Text(_error!,style:TextStyle(color:Theme.of(context).colorScheme.error)),
       if(!_loading&&_snapshot!=null&&_snapshot!.status!='active')const Text('Necesitas pertenecer a un rancho activo.'),
-      if(_snapshot?.offline==true)const Text('Las jornadas requieren conexión a internet.'),
-      if(selected==null&&_snapshot?.status=='active'&&_snapshot?.offline==false)...[
+      if(_snapshot?.offline==true)Text(offlineEnabled?'Sin conexión · jornadas descargadas; cambios pendientes de confirmación.':'Las jornadas requieren conexión a internet.'),
+      if(selected==null&&_snapshot?.status=='active'&&(_snapshot?.offline==false||offlineEnabled))...[
         FilledButton.icon(onPressed:_busy?null:_create,icon:const Icon(Icons.add),label:const Text('Nueva jornada')),
         if(_items.isEmpty)const Text('No hay jornadas registradas.'),
         for(final j in _items)Card(child:ListTile(title:Text(j.title),subtitle:Text('${j.date} · ${j.attended}/${j.roster.length} atendidos · ${j.open?'En curso':j.status=='completed'?'Completada':'Incompleta'}'),trailing:const Icon(Icons.chevron_right),onTap:(){setState((){_selected=j.id;_query='';_filter='all';});})),
@@ -96,6 +109,8 @@ class _JourneysPageState extends State<JourneysPage>{
         TextButton.icon(onPressed:()=>setState(()=>_selected=null),icon:const Icon(Icons.arrow_back),label:const Text('Volver a jornadas')),
         Text(selected.title,style:Theme.of(context).textTheme.headlineMedium),
         Text(selected.date),
+        if((_pending[selected.id]?.length??0)>0)Text('${_pending[selected.id]!.length} asistencias en cola; no confirmadas.'),
+        if(offlineEnabled&&selected.open&&(selected.type!='other'||manager))OutlinedButton(onPressed:_busy?null:()=>_addAnimals(selected),child:const Text('Agregar animales')),
         for(final k in ['product','dose','notes'])if((selected.payload[k]?.toString()??'').isNotEmpty)Text(selected.payload[k].toString()),
         const SizedBox(height:12),
         LinearProgressIndicator(value:selected.roster.isEmpty?0:selected.attended/selected.roster.length),
@@ -108,10 +123,10 @@ class _JourneysPageState extends State<JourneysPage>{
             Card(child:ListTile(
               leading:Icon(a['attended']==true?Icons.check_circle:Icons.radio_button_unchecked),
               title:Text('${a['tag']??''} · ${a['name']??''}'),
-              subtitle:Text(a['attended']==true?(selected.type=='weight'?'${a['weight']} kg':'Atendido'):'Pendiente'),
-              trailing:selected.open&&eventTypes.containsKey(selected.type)&&(_snapshot?.animals.any((x)=>x.id==a['id']&&x.active)??false)&&(a['attended']!=true||selected.type=='weight')?TextButton(onPressed:_busy?null:()=>_attend(selected,a),child:Text(selected.type=='weight'?'Pesar':'Atender')):null,
+              subtitle:Text(_pending[selected.id]?.contains(a['id'])==true?'En cola, sin confirmar':a['attended']==true?(selected.type=='weight'?'${a['weight']} kg':'Atendido'):'Pendiente'),
+              trailing:selected.open&&(eventTypes.containsKey(selected.type)||(selected.type=='other'&&manager&&offlineEnabled))&&_pending[selected.id]?.contains(a['id'])!=true&&(_snapshot?.animals.any((x)=>x.id==a['id']&&x.active)??false)&&(a['attended']!=true||selected.type=='weight')?TextButton(onPressed:_busy?null:()=>_attend(selected,a),child:Text(selected.type=='weight'?'Pesar':'Atender')):null,
             )),
-        if(selected.open&&_snapshot?.canManage==true&&eventTypes.containsKey(selected.type))FilledButton(onPressed:_busy?null:()=>_finish(selected),child:const Text('Finalizar jornada')),
+        if(selected.open&&_snapshot?.canManage==true&&(eventTypes.containsKey(selected.type)||(selected.type=='other'&&offlineEnabled))&&(_pending[selected.id]?.isEmpty??true))FilledButton(onPressed:_busy?null:()=>_finish(selected),child:const Text('Finalizar jornada')),
         if(selected.status=='incomplete'&&selected.pending>0&&_snapshot?.canManage==true&&repository?.supportsJourneyResume==true)OutlinedButton(onPressed:_busy?null:()=>_resume(selected),child:const Text('Reanudar jornada')),
         if(selected.open&&_snapshot?.canManage!=true)const Text('Un administrador debe finalizar la jornada.'),
       ],
@@ -137,25 +152,26 @@ class _CreateJourney extends StatefulWidget{
 }
 class _CreateJourneyState extends State<_CreateJourney>{
   final _id=const Uuid().v4();
-  final _product=TextEditingController(),_dose=TextEditingController(),_notes=TextEditingController();
+  final _name=TextEditingController(),_product=TextEditingController(),_dose=TextEditingController(),_notes=TextEditingController();
   late final Set<String> _ids=widget.snapshot.animals.where((a)=>a.active).map((a)=>a.id).toSet();
   String _type='weight';
   DateTime _date=DateTime.now();
   bool _busy=false,_uncertain=false;
   String? _error;
-  @override void dispose(){_product.dispose();_dose.dispose();_notes.dispose();super.dispose();}
+  @override void dispose(){_name.dispose();_product.dispose();_dose.dispose();_notes.dispose();super.dispose();}
   Future<void> _save()async{
     if(_busy||_ids.isEmpty)return;
     setState((){_busy=true;_error=null;});
-    try{await widget.repository.createJourney(widget.snapshot,_id,_type,DateFormat('yyyy-MM-dd').format(_date),_product.text.trim(),_dose.text.trim(),_notes.text.trim(),_ids);if(mounted)Navigator.pop(context,_id);}
+    try{if(_type=='other'){await (widget.repository as ExtendedJourneyRepository).createCustomJourney(widget.snapshot,_id,_name.text.trim(),DateFormat('yyyy-MM-dd').format(_date),_product.text.trim(),_dose.text.trim(),_notes.text.trim(),_ids);}else{await widget.repository.createJourney(widget.snapshot,_id,_type,DateFormat('yyyy-MM-dd').format(_date),_product.text.trim(),_dose.text.trim(),_notes.text.trim(),_ids);}if(mounted)Navigator.pop(context,_id);}
     catch(_){if(mounted)setState((){_uncertain=true;_error='No se confirmó la creación. Reintenta con los mismos datos o consulta las jornadas.';});}
     finally{if(mounted)setState(()=>_busy=false);}
   }
   @override Widget build(BuildContext context){
     final locked=_busy||_uncertain;
     return PopScope(canPop:!_busy,child:Scaffold(appBar:AppBar(title:const Text('Nueva jornada')),body:SafeArea(child:ListView(padding:const EdgeInsets.all(20),children:[
-      DropdownButtonFormField<String>(initialValue:_type,items:[for(final e in eventTypes.entries)DropdownMenuItem(value:e.key,child:Text(e.value))],onChanged:locked?null:(v)=>setState(()=>_type=v!),decoration:const InputDecoration(labelText:'Tipo')),
+      DropdownButtonFormField<String>(initialValue:_type,items:[for(final e in eventTypes.entries)DropdownMenuItem(value:e.key,child:Text(e.value)),if(widget.repository is ExtendedJourneyRepository&&(widget.repository as ExtendedJourneyRepository).supportsOfflineJourneys&&['owner','admin'].contains(widget.snapshot.role))const DropdownMenuItem(value:'other',child:Text('Actividad personalizada'))],onChanged:locked?null:(v)=>setState(()=>_type=v!),decoration:const InputDecoration(labelText:'Tipo')),
       OutlinedButton(onPressed:locked?null:()async{final d=await showDatePicker(context:context,initialDate:_date,firstDate:DateTime(1900),lastDate:DateTime.now());if(mounted&&d!=null)setState(()=>_date=d);},child:Text(DateFormat('dd/MM/yyyy').format(_date))),
+      if(_type=='other')TextField(controller:_name,enabled:!locked,maxLength:120,decoration:const InputDecoration(labelText:'Nombre de actividad')),
       TextField(controller:_product,enabled:!locked,maxLength:120,decoration:const InputDecoration(labelText:'Producto')),
       TextField(controller:_dose,enabled:!locked,maxLength:120,decoration:const InputDecoration(labelText:'Dosis registrada')),
       TextField(controller:_notes,enabled:!locked,maxLength:2000,decoration:const InputDecoration(labelText:'Observaciones')),

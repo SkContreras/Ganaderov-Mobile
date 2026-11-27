@@ -2,7 +2,8 @@ import '../../livestock/domain/inventory.dart';
 import '../../livestock/domain/event_draft.dart';
 
 class Journey {
-  const Journey(this.id,this.version,this.payload);
+  const Journey(this.id,this.version,this.payload,{this.revision});
+  final int? revision;
   final String id,version;
   final Map<String,dynamic> payload;
   String get type=>payload['type']?.toString()??'';
@@ -22,4 +23,11 @@ abstract interface class JourneyRepository {
   Future<void> resumeJourney(InventorySnapshot snapshot,Journey journey);
   bool get supportsJourneyResume;
   Future<void> attendJourney(InventorySnapshot snapshot,Journey journey,String animalId,double? weight);
+}
+
+abstract interface class ExtendedJourneyRepository{
+ bool get supportsOfflineJourneys;
+ Future<void> createCustomJourney(InventorySnapshot snapshot,String id,String name,String date,String product,String dose,String notes,Set<String> animalIds);
+ Future<void> addJourneyAnimals(InventorySnapshot snapshot,Journey journey,Set<String> animalIds);
+ Future<Set<String>> pendingJourneyAnimals(InventorySnapshot snapshot,String journeyId);
 }
